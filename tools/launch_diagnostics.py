@@ -7,8 +7,10 @@ import sys
 def main():
     try:
         for module in ("PyQt6.QtWidgets", "PyQt6.QtWebEngineWidgets", "PyQt6.QtMultimedia",
-                       "aiohttp", "websockets", "yaml", "loguru", "edge_tts", "requests", "webrtcvad"):
+                       "aiohttp", "websockets", "yaml", "loguru", "edge_tts", "webrtcvad"):
             importlib.import_module(module)
+        if importlib.util.find_spec("requests") is None:
+            raise ValueError("缺少 requests，请安装 requirements.txt")
         from src.core.app_config import load_config, project_path
         config = load_config()
         if config["sprite"]["renderer"] == "pmx" and not project_path(config["sprite"]["model"]["path"]).is_file():
