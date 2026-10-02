@@ -8,6 +8,8 @@
 
 ## 识别方式
 
+默认热词为 **心、心月狐、御者、鸣潮、鳴潮、Hsin**。“麦克风设置 → 识别热词”可编辑，每行一项，保存后下一次识别生效；清空即关闭提示。智谱收到 JSON 热词列表，本地 Whisper 收到解码热词提示，按分词长度限制提示大小。热词改善专名识别，但不能保证每次准确；不会把普通词强制替换成角色名。
+
 - **自动**：中文或自动检测时，有智谱密钥则优先 GLM-ASR；无密钥使用本地 Whisper。选择日语时使用本地 Whisper。
 - **智谱**：短句以 WAV 上传到官方 `audio/transcriptions` 接口；密钥可填写在设置中，也可使用 `ZHIPU_API_KEY`。云端失败时默认尝试本地识别，状态标明回退；可关闭回退。官方接口支持中日等语言，见 [智谱说明](https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-asr-2512)。
 - **本地 Whisper**：CPU int8，不占用 GPT-SoVITS 显存，音频留在本机。默认使用已缓存的 `Systran/faster-whisper-base`；可指定其他已下载的 faster-whisper 模型目录。首次加载需要数秒，base 对轻声、专名和噪声的准确率有限。

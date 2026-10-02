@@ -1,10 +1,11 @@
 """麦克风、识别语言和引擎设置；凭据只保存到忽略提交的本机配置。"""
 from copy import deepcopy
 import os
-from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QCheckBox
+from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QCheckBox, QPlainTextEdit
 import yaml
 from src.core.app_config import PROJECT_ROOT, read_yaml
 from src.core.stt_manager import validate_stt
+from src.core.stt_hotwords import hotwords
 
 
 class MicrophoneDialog(QDialog):
@@ -46,8 +47,12 @@ class MicrophoneDialog(QDialog):
         self.energy.setValue(config.get("energy_threshold", 250))
         self.fallback = QCheckBox("智谱失败时使用本地 Whisper")
         self.fallback.setChecked(config.get("fallback", True))
+        self.hotwords = QPlainTextEdit("\n".join(config["hotwords"]))
+        self.hotwords.setMaximumHeight(110)
+        self.hotwords.setPlaceholderText("每行一个词；清空可关闭热词提示。最多 100 项，每项 40 字。")
         for name, widget in (("输入设备", self.device), ("识别语言", self.language), ("识别引擎", self.provider), ("智谱 API Key", self.key), ("本地模型目录", self.model_path), ("说完后的停顿", self.silence), ("底噪门限", self.energy), ("", self.fallback)):
             form.addRow(name, widget)
+        form.addRow("识别热词", self.hotwords)
         note = QLabel("开麦后，说完停顿即可发送到当前对话后端。\n识别语言与心的回复语言分别设置。智谱识别会上传当前短句；\n本地 Whisper 不上传音频。心回复与朗读期间暂停收音。")
         note.setWordWrap(True)
         form.addRow(note)
@@ -64,9 +69,11 @@ class MicrophoneDialog(QDialog):
         candidate.update(device=self.device.currentData(), language=self.language.currentData(),
             provider=self.provider.currentData(), model_path=self.model_path.text().strip(),
             silence_ms=self.silence.value(), energy_threshold=self.energy.value(), fallback=self.fallback.isChecked(),
+            hotwords=[line.strip() for line in self.hotwords.toPlainText().splitlines() if line.strip()],
             zhipu={"api_key": self.key.text().strip()})
         try:
             validate_stt(candidate)
+            candidate["hotwords"] = hotwords(candidate)
             path = PROJECT_ROOT / "config.local.yaml"
             data = read_yaml(path) if path.exists() else {}
             data["stt"] = candidate

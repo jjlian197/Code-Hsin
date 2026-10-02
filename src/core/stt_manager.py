@@ -9,11 +9,13 @@ import time
 from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
 from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSource, QMediaDevices
 from src.core.speech_recognizer import SpeechRecognizer
+from src.core.stt_hotwords import hotwords
 
 
 def validate_stt(config):
     if not isinstance(config, dict):
         raise ValueError("stt 需要配置对象")
+    hotwords(config)
     if config.get("provider", "auto") not in {"auto", "zhipu", "whisper"}:
         raise ValueError("识别引擎需要 auto、zhipu 或 whisper")
     if config.get("language", "zh") not in {"auto", "zh", "ja"}:
@@ -79,6 +81,7 @@ class STTManager(QObject):
         super().__init__(parent)
         self.config = deepcopy(config.get("stt", {}))
         validate_stt(self.config)
+        self.config["hotwords"] = hotwords(self.config)
         self.enabled = False  # 每次启动都由用户主动开麦。
         self.blocked = False
         self.busy = False
@@ -116,6 +119,7 @@ class STTManager(QObject):
                 "provider": self.config.get("provider", "auto"),
                 "actual_provider": self.actual_provider or SpeechRecognizer.provider(self.config),
                 "language": self.config.get("language", "zh"), "device": self.config.get("device", ""),
+                "hotwords": list(self.config["hotwords"]),
                 "last_text": self.last_text, "error": self.error, "warning": self.warning,
                 "cloud_configured": bool(SpeechRecognizer.key(self.config)),
                 "local_installed": SpeechRecognizer.local_available()}
@@ -125,10 +129,11 @@ class STTManager(QObject):
             raise ValueError("语音识别正在退出")
         if enabled is not None and type(enabled) is not bool:
             raise ValueError("enabled 需要布尔值")
-        if any(key not in {"provider", "language", "device", "model_path", "fallback", "silence_ms", "energy_threshold", "zhipu"} for key in settings):
+        if any(key not in {"provider", "language", "device", "model_path", "fallback", "silence_ms", "energy_threshold", "zhipu", "hotwords"} for key in settings):
             raise ValueError("未知语音识别设置")
         candidate = {**self.config, **deepcopy(settings)}
         validate_stt(candidate)
+        candidate["hotwords"] = hotwords(candidate)
         changing = candidate != self.config
         stopping = enabled is False
         if changing or stopping:

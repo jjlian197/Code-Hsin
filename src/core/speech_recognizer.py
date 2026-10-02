@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import wave
+from src.core.stt_hotwords import hotwords
 
 
 def wav_bytes(pcm):
@@ -64,11 +65,15 @@ class SpeechRecognizer:
         if not key:
             raise ValueError("请在麦克风设置中填写智谱 API Key，或选择本地 Whisper")
         import requests
+        data = {"model": "glm-asr-2512", "stream": "false"}
+        words = hotwords(config)
+        if words:
+            data["hotwords"] = json.dumps(words, ensure_ascii=False)
         try:
             response = requests.post(
                 "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
                 headers={"Authorization": "Bearer " + key},
-                data={"model": "glm-asr-2512", "stream": "false"},
+                data=data,
                 files={"file": ("utterance.wav", audio, "audio/wav")},
                 timeout=(5, 25),
             )
@@ -119,7 +124,8 @@ class SpeechRecognizer:
                             responses.put({"error": "Whisper 子进程异常退出，请检查本地识别依赖"})
                     threading.Thread(target=read, name="HsinSTTReader", daemon=True).start()
                 process, responses = self._process, self._responses
-                request = {"audio": base64.b64encode(audio).decode("ascii"), "language": language, "model": path}
+                request = {"audio": base64.b64encode(audio).decode("ascii"), "language": language, "model": path,
+                           "hotwords": hotwords(config)}
                 process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
                 process.stdin.flush()
             response = responses.get(timeout=60)

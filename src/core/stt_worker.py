@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import sys
+from src.core.stt_hotwords import DEFAULT_HOTWORDS, normalize_hotwords, whisper_hotwords
 
 
 def main():
@@ -13,6 +14,7 @@ def main():
             request = json.loads(line)
             path = request.get("model", "base")
             language = request.get("language", "zh")
+            words = normalize_hotwords(request.get("hotwords", DEFAULT_HOTWORDS))
             if language not in {"zh", "ja", "auto"}:
                 raise ValueError("识别语言无效")
             audio = base64.b64decode(request["audio"], validate=True)
@@ -28,7 +30,8 @@ def main():
                     raise RuntimeError("本地 Whisper 模型不可用；请在麦克风设置中选择已下载的模型目录") from None
             segments, _ = model.transcribe(io.BytesIO(audio),
                 language=None if language == "auto" else language, beam_size=3,
-                condition_on_previous_text=False, vad_filter=True)
+                condition_on_previous_text=False, vad_filter=True,
+                hotwords=whisper_hotwords(words, model.hf_tokenizer))
             response = {"text": "".join(segment.text for segment in segments).strip()[:4000]}
         except (RuntimeError, ValueError) as exc:
             response = {"error": str(exc)}

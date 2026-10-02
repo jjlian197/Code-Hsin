@@ -81,7 +81,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 ## HTTP
 
-`get_status.data.stt` 和 `stt_status` 广播提供 enabled、listening、recognizing、blocked、speech_active、level、last_text、error、warning 与实际引擎，不返回密钥。`POST /api/stt_config` 接受上表字段。麦克风开关不自动开启 TTS；声音回复需开启“语音”。心回复、合成和播放时关闭录音设备，结束后延迟恢复。详见 [麦克风识别](STT.md)。
+`get_status.data.stt` 和 `stt_status` 广播提供 enabled、listening、recognizing、blocked、speech_active、level、last_text、error、warning、hotwords 与实际引擎，不返回密钥。`POST /api/stt_config` 接受上表字段，也接受 `hotwords: ["心", "心月狐"]`；最多 100 项，每项 1–40 字符，空数组关闭提示。热词切换取消旧识别结果，下一句使用新词表。麦克风开关不自动开启 TTS；声音回复需开启“语音”。心回复、合成和播放时关闭录音设备，结束后延迟恢复。详见 [麦克风识别](STT.md)。
 
 | 方法和路由 | 请求 |
 | --- | --- |

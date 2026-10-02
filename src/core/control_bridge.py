@@ -149,7 +149,7 @@ class ControlBridge(QObject):
         if kind == "chat":
             return self.success("chat_queued", window.send_chat(data.get("text"), data.get("language")))
         if kind == "stt_config":
-            if any(key not in {"action", "enabled", "provider", "language", "device", "silence_ms", "energy_threshold", "fallback"} for key in data):
+            if any(key not in {"action", "enabled", "provider", "language", "device", "silence_ms", "energy_threshold", "fallback", "hotwords"} for key in data):
                 raise CommandError("未知 stt_config 设置")
             action = data.get("action", "set")
             if action == "devices":

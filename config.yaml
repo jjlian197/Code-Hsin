@@ -43,6 +43,7 @@ runtime:
   directory: .runtime
 # 麦克风每次启动默认关闭，需在菜单或聊天窗口主动开启。
 stt:
+  hotwords: [心, 心月狐, 御者, 鸣潮, 鳴潮, Hsin]
   provider: auto
   language: zh
   device: ""

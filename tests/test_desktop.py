@@ -270,6 +270,21 @@ class APITest(QtWindowTestCase):
         self.window._sync_microphone()
         self.assertFalse(self.window.stt.blocked)
 
+    def test_hotwords_settings_are_persistent(self):
+        from unittest.mock import patch
+        import yaml
+        from src.ui.microphone_dialog import MicrophoneDialog
+        root = Path(self.temp.name)
+        (root / "config.local.yaml").write_text("chat:\n  provider: hermes\n", encoding="utf-8")
+        dialog = MicrophoneDialog(self.window)
+        dialog.hotwords.setPlainText("心\n心月狐\n御者\n心")
+        with patch("src.ui.microphone_dialog.PROJECT_ROOT", root):
+            dialog.save()
+        saved = yaml.safe_load((root / "config.local.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(saved["stt"]["hotwords"], ["心", "心月狐", "御者"])
+        self.assertEqual(self.window.stt.config["hotwords"], ["心", "心月狐", "御者"])
+        self.assertEqual(saved["chat"]["provider"], "hermes")
+
     def test_shutdown_releases_ports(self):
         ports = [self.services.ws.port, self.services.http.port]
         self.bridge.close()

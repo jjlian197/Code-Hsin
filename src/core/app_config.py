@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import yaml
+from src.core.stt_hotwords import DEFAULT_HOTWORDS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = {
@@ -14,6 +15,7 @@ DEFAULT_CONFIG = {
     "logging": {"level": "INFO", "file": ".runtime/hsin.log"},
     "runtime": {"directory": ".runtime"},
     "stt": {"provider": "auto", "language": "zh", "device": "", "model_path": "",
+            "hotwords": list(DEFAULT_HOTWORDS),
             "silence_ms": 700, "energy_threshold": 250, "fallback": True, "zhipu": {"api_key": ""}},
     "voice": {"manifest": "voice/hsin_zh/selection.json", "profiles": "voice/profiles.json",
               "enabled": False, "language": "zh", "volume": 0.65, "port": 19880,
