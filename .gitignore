@@ -23,6 +23,7 @@ __pycache__/
 .venv/
 .runtime/
 config.local.yaml
+config.local.tmp
 voice/profiles.json
 voice/samples/
 voice/**/configs/trained_voice.json

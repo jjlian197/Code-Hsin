@@ -41,7 +41,7 @@ function Find-Python {
     foreach ($candidate in $candidates) {
         if ($seen.ContainsKey($candidate) -or -not (Test-Path -LiteralPath $candidate)) { continue }
         $seen[$candidate] = $true
-        $output = & $candidate -c 'from PyQt6 import QtWidgets,QtWebEngineWidgets,QtMultimedia; import aiohttp,websockets,yaml,loguru,edge_tts; print(1)' 2>&1
+        $output = & $candidate -c 'from PyQt6 import QtWidgets,QtWebEngineWidgets,QtMultimedia; import aiohttp,websockets,yaml,loguru,edge_tts,requests,webrtcvad; print(1)' 2>&1
         if ($LASTEXITCODE -eq 0) { return $candidate }
         Write-LaunchLog ('Python unavailable: ' + $candidate + ' / ' + (($output | Out-String).Trim()))
     }

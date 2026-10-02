@@ -15,6 +15,13 @@ voice:
   fallback: true
   volume: 0.65
   port: 19880
+stt:
+  provider: auto
+  language: zh
+  device: ""  # Windows 默认麦克风
+  model_path: ""  # 已缓存的 faster-whisper-base，或填写本地模型目录
+  zhipu:
+    api_key: ""
 chat:
   provider: hermes
   hermes:

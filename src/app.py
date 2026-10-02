@@ -64,6 +64,7 @@ def main(argv=None):
     window.touch_event.connect(lambda action, part: services.broadcast_sync("touch_event", {"action": action, "part": part}))
     window.tts.changed.connect(lambda: services.broadcast_sync("tts_status", window.tts.snapshot()))
     window.chat.changed.connect(lambda: services.broadcast_sync("chat_status", window.chat.snapshot()))
+    window.stt.changed.connect(lambda: services.broadcast_sync("stt_status", window.stt.snapshot()))
     try:
         services.start()
     except RuntimeError as exc:

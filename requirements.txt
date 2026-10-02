@@ -8,3 +8,5 @@ aiohttp==3.13.3
 PyYAML==6.0.3
 loguru==0.7.3
 edge-tts==7.2.7
+requests==2.32.5
+webrtcvad-wheels==2.0.14

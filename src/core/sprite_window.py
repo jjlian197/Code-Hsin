@@ -12,6 +12,7 @@ from src.core.sprite_view import SpriteView
 from src.core.pmx_view import PmxView
 from src.core.voice_player import LocalVoicePlayer
 from src.core.tts_manager import TTSManager
+from src.core.stt_manager import STTManager
 from src.core.voice_phrases import TOUCH_REPLIES, PREVIEW_PHRASES
 from src.core.chat_manager import ChatManager, spoken_reply
 from src.core.chat_backends import PROVIDERS
@@ -48,6 +49,12 @@ class HsinSpriteWindow(QMainWindow):
         self.voice_player = LocalVoicePlayer(self)
         self.tts = TTSManager(config, self.voice_player, self)
         self.chat = ChatManager(config, self)
+        self.stt = STTManager(config, self)
+        self.stt.transcript.connect(self._microphone_transcript)
+        self.stt.failed.connect(lambda error: self.show_message(error[:500], 8000))
+        self.chat.changed.connect(self._sync_microphone)
+        self.tts.changed.connect(self._sync_microphone)
+        self.voice_player.player.playbackStateChanged.connect(self._sync_microphone)
         self.chat_dialog = None
         self.chat.reply_ready.connect(self._chat_reply)
         self._chat_language = self.tts.language
@@ -62,6 +69,8 @@ class HsinSpriteWindow(QMainWindow):
         self.chat.changed.connect(self._refresh_chat_menu)
         self._refresh_chat_menu()
         self._refresh_voice_menu()
+        self.stt.changed.connect(self._refresh_microphone_menu)
+        self._refresh_microphone_menu()
         self._restore_state()
         self.setWindowOpacity(float(config["sprite"]["window"]["opacity"]))
         self.set_click_through(config["sprite"]["window"]["click_through"])
@@ -201,6 +210,13 @@ class HsinSpriteWindow(QMainWindow):
         voice_menu.addAction("停止语音", self.tts.stop)
         self._voice_status_action = voice_menu.addAction("准备语音")
         self._voice_status_action.setEnabled(False)
+        microphone_menu = menu.addMenu("麦克风识别")
+        self._microphone_action = microphone_menu.addAction("开启麦克风对话")
+        self._microphone_action.setCheckable(True)
+        self._microphone_action.triggered.connect(self.toggle_microphone)
+        microphone_menu.addAction("麦克风设置…", self.configure_microphone)
+        self._microphone_status_action = microphone_menu.addAction("麦克风已关闭")
+        self._microphone_status_action.setEnabled(False)
         menu.addAction("气泡示例", lambda: self.show_message("御者，我在这里。", 4000))
         menu.addSeparator()
         menu.addAction("退出", self.quit_requested.emit)
@@ -219,6 +235,41 @@ class HsinSpriteWindow(QMainWindow):
         if self.tts.language != self._chat_language:
             self._chat_language = self.tts.language
             self.chat.stop()
+
+    def _sync_microphone(self, *_):
+        from PyQt6.QtMultimedia import QMediaPlayer
+        speaking = self.voice_player.player.playbackState() != QMediaPlayer.PlaybackState.StoppedState
+        self.stt.set_blocked(self.chat.busy or self.tts.snapshot()["synthesizing"] or speaking)
+
+    def toggle_microphone(self, enabled):
+        self._sync_microphone()
+        self.stt.configure(enabled=enabled)
+        if enabled and self.stt.enabled:
+            self.show_message("麦克风已开启，说完停顿后我会回复。", 5000)
+
+    def configure_microphone(self):
+        from src.ui.microphone_dialog import MicrophoneDialog
+        MicrophoneDialog(self).exec()
+
+    def _refresh_microphone_menu(self):
+        state = self.stt.snapshot()
+        self._microphone_action.setChecked(state["enabled"])
+        label = "麦克风已关闭"
+        if state["enabled"]:
+            label = "识别中…" if state["recognizing"] else ("回复期间暂停收音" if state["blocked"] else "正在听你说话")
+        self._microphone_status_action.setText(state["error"] or label)
+        self._microphone_status_action.setToolTip(state["warning"] or state["last_text"])
+        if self.tray_icon:
+            self.tray_icon.setToolTip("心 · Hsin · " + label)
+
+    def _microphone_transcript(self, text):
+        if self.chat.busy:
+            return
+        self.show_message("听到：" + text[:450], 6000)
+        try:
+            self.send_chat(text)
+        except ValueError as exc:
+            self.show_message(str(exc), 6000)
 
     def set_chat_provider(self, provider):
         if provider != self.chat.provider:
@@ -453,6 +504,7 @@ class HsinSpriteWindow(QMainWindow):
         self.save_state()
         self.bubble_widget.hide_timer.stop()
         self.bubble_widget.close()
+        self.stt.close()
         self.chat.close()
         if self.chat_dialog:
             self.chat_dialog.close()

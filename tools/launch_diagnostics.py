@@ -7,7 +7,7 @@ import sys
 def main():
     try:
         for module in ("PyQt6.QtWidgets", "PyQt6.QtWebEngineWidgets", "PyQt6.QtMultimedia",
-                       "aiohttp", "websockets", "yaml", "loguru", "edge_tts"):
+                       "aiohttp", "websockets", "yaml", "loguru", "edge_tts", "requests", "webrtcvad"):
             importlib.import_module(module)
         from src.core.app_config import load_config, project_path
         config = load_config()

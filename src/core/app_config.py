@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "http": {"enabled": True, "host": "127.0.0.1", "port": 18766},
     "logging": {"level": "INFO", "file": ".runtime/hsin.log"},
     "runtime": {"directory": ".runtime"},
+    "stt": {"provider": "auto", "language": "zh", "device": "", "model_path": "",
+            "silence_ms": 700, "energy_threshold": 250, "fallback": True, "zhipu": {"api_key": ""}},
     "voice": {"manifest": "voice/hsin_zh/selection.json", "profiles": "voice/profiles.json",
               "enabled": False, "language": "zh", "volume": 0.65, "port": 19880,
               "provider": "gptsovits", "auto_translate": True, "fallback": True},
@@ -105,6 +107,8 @@ def load_config(path=None):
     if not isinstance(voice.get("profiles", "voice/profiles.json"), str) or not voice.get("profiles", "voice/profiles.json"):
         raise ValueError("voice.profiles 需要非空配置文件路径")
     validate_chat_config(config["chat"])
+    from src.core.stt_manager import validate_stt
+    validate_stt(config["stt"])
     return config
 
 

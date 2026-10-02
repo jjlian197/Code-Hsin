@@ -28,10 +28,25 @@ class ChatDialog(QDialog):
         self.stop_button = QPushButton("停止回复")
         self.stop_button.clicked.connect(owner.stop_chat)
         row.addWidget(self.stop_button)
+        self.microphone_button = QPushButton("开启麦克风")
+        self.microphone_button.setCheckable(True)
+        self.microphone_button.clicked.connect(owner.toggle_microphone)
+        row.addWidget(self.microphone_button)
         layout.addLayout(row)
+        self.microphone_status = QLabel()
+        layout.addWidget(self.microphone_status)
+        owner.stt.changed.connect(self.refresh_microphone)
         owner.chat.changed.connect(self.refresh)
         owner.chat.updated.connect(self.refresh)
         self.refresh()
+        self.refresh_microphone()
+
+    def refresh_microphone(self):
+        state = self.owner.stt.snapshot()
+        self.microphone_button.setChecked(state["enabled"])
+        self.microphone_button.setText("关闭麦克风" if state["enabled"] else "开启麦克风")
+        label = "识别中…" if state["recognizing"] else ("回复期间暂停收音" if state["blocked"] else "正在听你说话")
+        self.microphone_status.setText(state["error"] or (label if state["enabled"] else "麦克风已关闭"))
 
     def send(self):
         try:

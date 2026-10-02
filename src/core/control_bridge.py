@@ -129,9 +129,9 @@ class ControlBridge(QObject):
                                    "model_file_exists": bool(view.model_path and view.model_path.is_file()),
                                    "error": getattr(view, "load_error", None),
                                    "info": getattr(view, "model_info", {})},
-                      "tts": window.tts.snapshot(), "audio": window.voice_player.snapshot(), "chat": window.chat.snapshot(),
+                      "tts": window.tts.snapshot(), "audio": window.voice_player.snapshot(), "chat": window.chat.snapshot(), "stt": window.stt.snapshot(),
                       "voice_dataset_available": project_path(window.config["voice"]["manifest"]).is_file(),
-                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config"]}
+                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config"]}
             if view.renderer_name == "pmx":
                 status["capabilities"].append("model")
             if view.model_loaded:
@@ -148,6 +148,21 @@ class ControlBridge(QObject):
             return self.success("model_loading", {"form": form})
         if kind == "chat":
             return self.success("chat_queued", window.send_chat(data.get("text"), data.get("language")))
+        if kind == "stt_config":
+            if any(key not in {"action", "enabled", "provider", "language", "device", "silence_ms", "energy_threshold", "fallback"} for key in data):
+                raise CommandError("未知 stt_config 设置")
+            action = data.get("action", "set")
+            if action == "devices":
+                return self.success("stt_devices", {"devices": window.stt.devices()})
+            if action == "status":
+                return self.success("stt_config", window.stt.snapshot())
+            if action not in {"set", "on", "off", "toggle"}:
+                raise CommandError("stt_config.action 需要 set、status、devices、on、off 或 toggle")
+            settings = {key: value for key, value in data.items() if key != "action"}
+            if action in {"on", "off", "toggle"}:
+                settings["enabled"] = not window.stt.enabled if action == "toggle" else action == "on"
+            window._sync_microphone()
+            return self.success("stt_config", window.stt.configure(**settings))
         if kind == "chat_config":
             action = data.get("action", "set")
             if action == "stop":

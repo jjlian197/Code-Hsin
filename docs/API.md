@@ -32,6 +32,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 | `window` | `action: resize`, `width`, `height` | 大小范围 160–1600 |
 | `window` | `action: opacity`, `opacity` | 透明度 0.1–1 |
 | `window` | `action: hide/show/reset` | 隐藏（含气泡）、显示、回到右下角 |
+| `window` | `action: quit` | 先返回响应，再正常清理并退出 |
 | `window` | `action: click_through`, `enabled` | 鼠标穿透；可由托盘恢复 |
 | `window` | `action: always_on_top`, `enabled` | 调整置顶 |
 | `background` | `type: transparent/purple/有效颜色` | 透明、渐变或纯色背景 |
@@ -50,6 +51,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 | `audio` | `action: stop` | 停止播放并释放音频口型控制 |
 | `speak` | `text`, 可选 `language: zh/ja`, `speed: 0.5–2`, `volume: 0–1`, `translate: true/false` | 后台翻译与合成，返回请求编号；文本 1–500 字符 |
 | `tts_config` | `language: zh/ja`, `enabled`, `provider: gptsovits/edge`, `auto_translate`, `fallback` | 布尔开关、语言和引擎持久化；支持 action: set/status/on/off/toggle/stop |
+| `stt_config` | `action: set/status/devices/on/off/toggle`, `enabled`, `language: zh/ja/auto`, `provider: auto/zhipu/whisper`, `device` | 麦克风识别、设备枚举与状态；设备 ID 来自 devices，空字符串为系统默认。可选 silence_ms、energy_threshold、fallback；设置仅本次生效，持久设置在界面保存 |
 
 窗口变更响应为 `window_updated`，背景响应为 `background_set`，表情响应为 `expression_set`，状态响应为 `status`。加载中 `renderer.model_loaded=false`、`state=model_pending`；贴图完整加载且实际绘制后为 true / idle。失败时为 model_error，`renderer.error` 提供原因。`renderer.info` 包含顶点、三角形、骨骼、材质、表情与贴图补全数量。
 
@@ -78,6 +80,8 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 `provider` 可选 `hermes`、`openclaw`、`deepseek`。`chat` 返回 `chat_queued`、编号和语言，完成结果在 `get_status.data.chat.reply`；错误在 `chat.error`。`chat_status` 广播开始、停止、后端变化和完成状态。显式 `chat.language` 可选 zh/ja，默认跟随语音菜单。切换语音语言会取消当前回复。凭据不通过控制接口设置或返回。
 
 ## HTTP
+
+`get_status.data.stt` 和 `stt_status` 广播提供 enabled、listening、recognizing、blocked、speech_active、level、last_text、error、warning 与实际引擎，不返回密钥。`POST /api/stt_config` 接受上表字段。麦克风开关不自动开启 TTS；声音回复需开启“语音”。心回复、合成和播放时关闭录音设备，结束后延迟恢复。详见 [麦克风识别](STT.md)。
 
 | 方法和路由 | 请求 |
 | --- | --- |

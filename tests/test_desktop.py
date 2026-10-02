@@ -232,6 +232,44 @@ class APITest(QtWindowTestCase):
         result = future.result(timeout=3)
         self.assertEqual(result, {"type": "touch_event", "data": {"action": "tap", "part": "身体"}})
 
+    def test_stt_http_settings_and_invalid_batch(self):
+        from unittest.mock import patch
+        async def client():
+            url = self.services.endpoints()["http"]
+            async with ClientSession() as session:
+                async with session.post(url + "/api/stt_config", json={"enabled": True, "language": "ja", "provider": "whisper"}) as r:
+                    changed = await r.json()
+                async with session.post(url + "/api/stt_config", json={"language": "unknown", "enabled": False}) as r:
+                    invalid = await r.json()
+                async with session.post(url + "/api/stt_config", json={"action": "status"}) as r:
+                    state = await r.json()
+                async with session.post(url + "/api/stt_config", json={"action": "off"}) as r:
+                    stopped = await r.json()
+            return changed, invalid, state, stopped
+        with patch.object(self.window.stt, "_start_capture"):
+            changed, invalid, state, stopped = self.network(client())
+        self.assertTrue(changed["success"])
+        self.assertFalse(invalid["success"])
+        self.assertTrue(state["data"]["enabled"])
+        self.assertEqual(state["data"]["language"], "ja")
+        self.assertFalse(stopped["data"]["enabled"])
+        self.assertFalse(self.window._microphone_action.isChecked())
+
+    def test_chat_and_playback_block_microphone(self):
+        from PyQt6.QtMultimedia import QMediaPlayer
+        from unittest.mock import patch
+        self.window.chat.busy = True
+        self.window.chat.changed.emit()
+        self.assertTrue(self.window.stt.blocked)
+        self.window.chat.busy = False
+        self.window.chat.changed.emit()
+        self.assertFalse(self.window.stt.blocked)
+        with patch.object(self.window.voice_player.player, "playbackState", return_value=QMediaPlayer.PlaybackState.PlayingState):
+            self.window._sync_microphone()
+            self.assertTrue(self.window.stt.blocked)
+        self.window._sync_microphone()
+        self.assertFalse(self.window.stt.blocked)
+
     def test_shutdown_releases_ports(self):
         ports = [self.services.ws.port, self.services.http.port]
         self.bridge.close()

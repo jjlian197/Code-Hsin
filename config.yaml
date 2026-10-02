@@ -41,6 +41,15 @@ logging:
   file: .runtime/hsin.log
 runtime:
   directory: .runtime
+# 麦克风每次启动默认关闭，需在菜单或聊天窗口主动开启。
+stt:
+  provider: auto
+  language: zh
+  device: ""
+  model_path: ""
+  silence_ms: 700
+  energy_threshold: 250
+  fallback: true
 voice:
   enabled: true
   language: zh
