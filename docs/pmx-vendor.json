@@ -1,0 +1,58 @@
+{
+  "three_revision": "165",
+  "official_source": "https://github.com/mrdoob/three.js/tree/r165",
+  "files": [
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/animation/CCDIKSolver.js",
+      "sha256": "36b31607c3bf41d50f2db7f64ff42defe2a7189b259891d58e2b2d1de3d00baa"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/animation/MMDAnimationHelper.js",
+      "sha256": "1a1860d2dcf814ef26647091e1bcb5ae99a139581ca280196956b217b2adaf84"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/animation/MMDPhysics.js",
+      "sha256": "bbb5ec2d7f5455f246b11629d1da4561c4cfc73a3d6653fba7ff8a5274e4bbc6"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/ammo.wasm.js",
+      "sha256": "3fa63c584d4732f72b954c5ea105f1faca99559c95c57ce7bb738d3497f98228"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/ammo.wasm.wasm",
+      "sha256": "16be07b989963bddebfef66eab28a4387536eb37014d9df1531dab380bd96a93"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/LICENSE.ammo",
+      "sha256": "f9a230c1a7f6cb856a80b31041e8c0228c5eece8ef6f564b79b3bc8097927a97"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/LICENSE.mmd-parser",
+      "sha256": "23c9323625b14f3064c0ceca73d75e6e84c98151dcab2f1eccb54254f5a310c2"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.module.js",
+      "sha256": "77562d8a91949633814a6ce1f4060dcb95b1a672e8549f41e6524eb6f1c30c68"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/loaders/MMDLoader.js",
+      "sha256": "11b19899bf2eb901737e4fbdfec2066ac2765a52b3347eda71be9bc67de36914"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/loaders/TGALoader.js",
+      "sha256": "ce938459ed99d5234f9665270cca8552464d0d1703a094e49760631e6b14c7a3"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/shaders/MMDToonShader.js",
+      "sha256": "b1e01ab0442c3c04ec7fbfb024c15d7636c1ff94de260a839ab4ecbd69ffca5b"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/LICENSE",
+      "sha256": "4c40a1ef62450b857c3b2aaf294936304cd552d965fbcd9d32d4c5bcf4ba4454"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/three.module.js",
+      "sha256": "61718c7d4f2c65be011b954f51661079fbd3fa9839380cce38cf71c06153eddb"
+    }
+  ]
+}

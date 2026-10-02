@@ -1,0 +1,65 @@
+# 心 Hsin 桌面精灵，直接显示本地 PMX。
+sprite:
+  name: Hsin
+  renderer: pmx
+  animation:
+    physics: true
+    behavior:
+      auto_blink: true
+      breathing: true
+      mouse_follow: true
+      touch_reactions: true
+    # 外部 MMD 动作按组配置；例如 dance: [motions/example.vmd]
+    vmd: {}
+  window:
+    width: 400
+    height: 600
+    opacity: 1.0
+    always_on_top: true
+    click_through: false
+  model:
+    path: 鸣潮_心（双形态-修模绑骨后）_by_鸣潮_c3a9d71dc2a5b9e35e3ef19ca569afce/心_一阶段/心.pmx
+    forms:
+      first: 鸣潮_心（双形态-修模绑骨后）_by_鸣潮_c3a9d71dc2a5b9e35e3ef19ca569afce/心_一阶段/心.pmx
+      second: 鸣潮_心（双形态-修模绑骨后）_by_鸣潮_c3a9d71dc2a5b9e35e3ef19ca569afce/心_二阶段/心_二阶段.pmx
+    # 二阶段耳毛引用了缺失的 Tail_EX，沿用一阶段原贴图；不修改 PMX。
+    texture_overrides:
+      second:
+        textures/Tail_EX.png: 鸣潮_心（双形态-修模绑骨后）_by_鸣潮_c3a9d71dc2a5b9e35e3ef19ca569afce/心_一阶段/textures/Tail_EX.png
+
+# 独立端口，允许与 aemeath-spirit 同时运行。协议仍为 type/data。
+websocket:
+  enabled: true
+  host: 127.0.0.1
+  port: 18765
+http:
+  enabled: true
+  host: 127.0.0.1
+  port: 18766
+logging:
+  level: INFO
+  file: .runtime/hsin.log
+runtime:
+  directory: .runtime
+voice:
+  enabled: true
+  language: zh
+  provider: gptsovits
+  auto_translate: true
+  fallback: true
+  volume: 0.65
+  port: 19880
+  profiles: voice/profiles.json
+  manifest: voice/hsin_zh/selection.json
+
+# 默认连接现有 Hermes 桌面版；空地址会读取其服务登记中的动态端口。
+chat:
+  provider: hermes
+  hermes:
+    url: ""
+    profile: default
+  openclaw:
+    url: ws://127.0.0.1:18789/ws
+    agent: hsin
+  deepseek:
+    model: deepseek-v4-flash

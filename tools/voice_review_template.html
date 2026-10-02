@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>心 · 中配原声审听</title>
+<style>
+body{font:16px/1.7 system-ui,sans-serif;margin:0;background:#faf7f3;color:#342c2d}main{max-width:1040px;margin:36px auto;padding:0 24px}
+h1{font-size:30px}header{position:sticky;top:0;background:#faf7f3ee;padding:12px 0;backdrop-filter:blur(8px);z-index:1}
+button{border:0;border-radius:8px;background:#704966;color:white;padding:12px 20px;cursor:pointer;font:inherit}
+article{background:white;border:1px solid #e5dcd7;border-radius:14px;padding:20px;margin:18px 0}h2{font-size:20px;margin:0 0 8px}
+small{color:#765f66}audio{width:min(100%,420px);display:block;margin:16px 0}select,input{font:inherit;border:1px solid #b8aaa9;border-radius:6px;padding:6px}
+input{width:min(80%,600px);margin:12px 0}.long{color:#983b2c}#progress{margin-left:16px}p{white-space:pre-wrap}
+</style>
+<main><h1>心 · 中配原声审听</h1>
+<p>逐条核对：只有心说话、台词逐字吻合、无喊叫/音乐/明显音效、开头结尾完整。全部标为保留或剔除后导出审听表。选择会暂存在当前浏览器；备注意见写进导出的表格。</p>
+<header><button id="export">导出 review.csv</button><span id="progress"></span></header><section id="rows"></section></main>
+<script>
+const data=__VOICE_DATA__;
+const csvFields=['key','title','duration_seconds','wav','text','decision','notes'];
+const storeKey='hsin-voice-review-'+data.map(x=>x.wav_sha256).join('').slice(0,32);
+let saved={};try{saved=JSON.parse(localStorage.getItem(storeKey)||'{}')}catch{}
+const controls=new Map();
+function progress(){document.querySelector('#progress').textContent=`已审听 ${[...controls.values()].filter(x=>x.select.value!=='pending').length} / ${data.length}`;
+try{localStorage.setItem(storeKey,JSON.stringify(Object.fromEntries([...controls].map(([key,c])=>[key,{decision:c.select.value,notes:c.input.value}]))))}catch{}}
+for(const row of data){
+ const article=document.createElement('article');const title=document.createElement('h2');title.textContent=`${row.title} · ${row.duration_seconds} 秒`;article.append(title);
+ const category=document.createElement('small');category.textContent=row.category+' / '+row.language_tab;article.append(category);
+ const text=document.createElement('p');text.textContent=row.text;article.append(text);
+ const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.src=row.audio;article.append(audio);
+ audio.onplay=()=>document.querySelectorAll('audio').forEach(x=>{if(x!==audio)x.pause()});
+ if(!row.training_eligible){const note=document.createElement('p');note.className='long';note.textContent='超过 54 秒：保留原声，但暂不进入训练清单，须同步切分音频与台词。';article.append(note)}
+ const label=document.createElement('label');label.textContent='审听结果：';const select=document.createElement('select');
+ for(const [value,name] of [['pending','待审听'],['accept','保留'],['reject','剔除']]){const option=document.createElement('option');option.value=value;option.textContent=name;select.append(option)}
+ select.value=saved[row.key]?.decision||'pending';label.append(select);article.append(label,document.createElement('br'));
+ const input=document.createElement('input');input.placeholder='备注：错字、其他声音、截断或音效等';input.value=saved[row.key]?.notes||'';input.setAttribute('aria-label',`${row.title}备注`);article.append(input);
+ controls.set(row.key,{select,input});select.onchange=progress;input.oninput=progress;document.querySelector('#rows').append(article)
+}
+progress();
+document.querySelector('#export').onclick=()=>{
+ if([...controls.values()].some(c=>c.select.value==='pending')){alert('仍有待审听的素材。全部确认后再导出。');return}
+ const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+ const rows=data.map(row=>{const c=controls.get(row.key);return {...row,decision:c.select.value,notes:c.input.value}});
+ const csv='\ufeff'+[csvFields.join(','),...rows.map(row=>csvFields.map(k=>quote(row[k])).join(','))].join('\r\n');
+ const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='review.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
+};
+</script></html>

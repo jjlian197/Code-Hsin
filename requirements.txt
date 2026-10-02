@@ -1,0 +1,10 @@
+# 桌面框架：使用本机已验证的版本。
+PyQt6==6.10.0
+PyQt6-Qt6==6.10.0
+PyQt6-WebEngine==6.10.0
+PyQt6-WebEngine-Qt6==6.10.0
+websockets==12.0
+aiohttp==3.13.3
+PyYAML==6.0.3
+loguru==0.7.3
+edge-tts==7.2.7

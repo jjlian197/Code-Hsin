@@ -1,0 +1,67 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import * as THREE from '../src/assets/pmx_viewer/lib/three/three.module.js';
+import { Parser } from '../src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.module.js';
+import { HsinBehavior, behaviorMorphNames } from '../src/assets/pmx_viewer/behavior.js';
+
+// 两个真实 PMX 的名称与方向都验证，不依赖人为编造的模型控制名。
+const directory=fs.readdirSync('.').find(x=>x.startsWith('鸣潮_'));
+for(const [form,file] of [['心_一阶段','心.pmx'],['心_二阶段','心_二阶段.pmx']]){
+  const bytes=fs.readFileSync(`${directory}/${form}/${file}`);
+  const data=new Parser().parsePmx(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),true);
+  const mesh=new THREE.SkinnedMesh();
+  const bones=data.bones.map(b=>{const bone=new THREE.Bone();bone.name=b.name;mesh.add(bone);return bone;});
+  mesh.bind(new THREE.Skeleton(bones));
+  const morphs=data.morphs.filter(m=>behaviorMorphNames.includes(m.name));
+  assert.equal(morphs.length,behaviorMorphNames.length);
+  mesh.morphTargetDictionary=Object.fromEntries(morphs.map((m,i)=>[m.name,i]));
+  mesh.morphTargetInfluences=morphs.map(()=>0);
+  assert(data.morphs.find(m=>m.name==='Left').elements.reduce((v,e)=>v+e.position[0],0)>0);
+  const behavior=new HsinBehavior(mesh,{},()=>0.5);
+  const step=(delta=0.02)=>{behavior.prepareFrame();behavior.advance(delta);behavior.applyBones();behavior.applyFace();};
+  behavior.setPointer(1,1);
+  let blinkPeak=0;
+  for(let i=0;i<400;i++){step();blinkPeak=Math.max(blinkPeak,behavior.blink);}
+  assert(blinkPeak>0.9,'自动眨眼应完整闭合');
+  assert(Math.abs(behavior.gaze.x-1)<0.01);
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary.Left]>0.5,'鼠标向右，眼球向屏幕右');
+  const head=bones.find(b=>b.name==='頭');
+  assert(head.rotation.y>0.25&&head.rotation.y<0.4,'转头限幅且不累计');
+  assert(Math.abs(behavior.breath)>0.01);
+  assert(Math.abs(bones.find(b=>b.name==='上半身').position.y)>0.01,'呼吸应有可见的轻微垂直起伏');
+  behavior.setExpression('happy');behavior.setParameters({ParamMouthOpenY:1});
+  for(let i=0;i<30;i++)step();
+  assert(behavior.mouthOpen>0.95);
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary['あ']]>0.8);
+  assert.equal(mesh.morphTargetInfluences[mesh.morphTargetDictionary['にこり']],0.65);
+  behavior.setExpression('wink');behavior.forceBlink();step(0.07);
+  assert.equal(mesh.morphTargetInfluences[mesh.morphTargetDictionary['ウィンク']],1);
+  assert.equal(mesh.morphTargetInfluences[mesh.morphTargetDictionary['まばたき']],0);
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary['ウィンク右']]>0.9);
+  behavior.setExpression('happy');
+  behavior.setParameters({ParamMouthOpenY:0});behavior.setLip(1,'o',0.25);
+  for(let i=0;i<8;i++)step();
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary['お']]>0.5);
+  for(let i=0;i<50;i++)step();
+  assert(behavior.mouthOpen<0.001,'口型超时归零');
+  behavior.setAudio(0.8,true);for(let i=0;i<20;i++)step();assert(behavior.mouthOpen>0.7);
+  behavior.setAudio(0,false);for(let i=0;i<40;i++)step();assert(behavior.mouthOpen<0.001);
+  assert(behavior.touch('head'));assert(!behavior.touch('tail'),'连续摸摸防抖');
+  for(let i=0;i<20;i++)step();assert(behavior.touchWeight>0.5);
+  for(let i=0;i<100;i++)step();assert(!behavior.touchState,'触摸反应自动结束');
+  assert(behavior.touch('tail'));for(let i=0;i<20;i++)step();
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary['びっくり']]>0.15);
+  behavior.setLip(1,'a',0.25);step(1.9);
+  assert(!behavior.touchState,'低帧率时触摸按实际时间结束');
+  for(let i=0;i<40;i++)step();assert(behavior.mouthOpen<0.001);
+  behavior.setExpression('normal');
+  behavior.setMotionClip(new THREE.AnimationClip('vmd',1,[new THREE.QuaternionKeyframeTrack('.bones[頭].quaternion',[0,1],[0,0,0,1,0,0,0,1])]));
+  behavior.prepareFrame();head.quaternion.identity();step();
+  assert(head.quaternion.angleTo(new THREE.Quaternion())<1e-6,'VMD 写入头部时跟随层让位');
+  behavior.setMotionClip(null);behavior.clearParameters();behavior.setSettings({mouse_follow:false,breathing:false,auto_blink:false});
+  for(let i=0;i<160;i++)step();
+  assert(Math.abs(behavior.gaze.x)<1e-5);assert.equal(behavior.breath,0);
+  assert(head.quaternion.angleTo(new THREE.Quaternion())<1e-6);
+  assert(bones.every(b=>b.quaternion.toArray().every(Number.isFinite)));
+  console.log('PASS:',form,'眨眼、五元音、眼神方向、转头限幅、呼吸、触摸、VMD 让位及停止恢复');
+}

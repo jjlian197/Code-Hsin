@@ -1,0 +1,38 @@
+# 原声、模型权重、预处理产物与完整来源资料仅保留在本机。
+voice/**/raw/
+voice/**/wav32k/
+voice/**/source/
+voice/**/experiment/
+voice/**/weights/
+voice/**/selection.json
+voice/**/review.csv
+voice/**/automatic_review.csv
+voice/**/automatic_audit.json
+voice/**/automatic_audit.log
+voice/**/reviewed_selection.json
+voice/**/temp/
+voice/**/*.list
+voice/**/reference_candidates.json
+voice/**/configs/app_voice_profile.draft.yaml
+voice/**/configs/reference_request.draft.json
+voice/**/configs/hsin_voice.yaml
+voice/**/configs/reference_request.json
+voice/**/review.html
+__pycache__/
+*.part
+.venv/
+.runtime/
+config.local.yaml
+voice/profiles.json
+voice/samples/
+voice/**/configs/trained_voice.json
+# 原模型说明禁止二次配布，保留在本机。
+鸣潮_*/
+# 本机生成的训练配置与验证摘要不作为可迁移的源码分发。
+voice/**/configs/
+voice/**/validation.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key

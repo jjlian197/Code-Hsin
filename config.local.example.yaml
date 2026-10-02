@@ -1,0 +1,30 @@
+# 可复制为 config.local.yaml 覆盖本机设置。
+sprite:
+  window:
+    width: 400
+    height: 600
+websocket:
+  port: 18765
+http:
+  port: 18766
+voice:
+  enabled: true
+  language: zh
+  provider: gptsovits
+  auto_translate: true
+  fallback: true
+  volume: 0.65
+  port: 19880
+chat:
+  provider: hermes
+  hermes:
+    url: ""  # 留空，自动发现 Hermes 桌面服务端口
+    profile: default
+    token: ""
+  openclaw:
+    url: ws://127.0.0.1:18789/ws
+    agent: hsin
+    token: ""
+  deepseek:
+    model: deepseek-v4-flash
+    api_key: ""

@@ -1,0 +1,2 @@
+# 下载和配置生成只需 PyYAML；ASR 使用本机 GPT-SoVITS 自带的运行环境与模型。
+PyYAML==6.0.3
