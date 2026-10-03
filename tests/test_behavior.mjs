@@ -62,6 +62,36 @@ for(const [form,file] of [['心_一阶段','心.pmx'],['心_二阶段','心_二�
   for(let i=0;i<160;i++)step();
   assert(Math.abs(behavior.gaze.x)<1e-5);assert.equal(behavior.breath,0);
   assert(head.quaternion.angleTo(new THREE.Quaternion())<1e-6);
+  // 对话姿态平滑进入/退出，手动动作与拖动能抢占，随机动作尊重固定注视。
+  for(const state of ['thinking','speaking','listening']) {
+    behavior.setActivity({state});for(let i=0;i<100;i++)step();
+    assert(behavior.activityWeights[state]>0.99);
+    assert(Math.abs(head.rotation.y)<0.15,'姿态不能逐帧累计');
+    behavior.setActivity({state:'idle'});for(let i=0;i<100;i++)step();
+    assert(behavior.activityWeights[state]<0.001);
+  }
+  behavior.setActivity({state:'speaking'});for(let i=0;i<100;i++)step();
+  behavior.setManualMotion(true);step();assert(Math.abs(bones.find(b=>b.name==='右腕').rotation.z)<1e-6);
+  behavior.setManualMotion(false);behavior.setActivity({state:'speaking',interacting:true});step();
+  assert(Math.abs(bones.find(b=>b.name==='右腕').rotation.z)<1e-6);
+  behavior.setActivity({state:'idle'});behavior.nextIdle=behavior.time;step();step(2);
+  assert(behavior.idleAction&&behavior.idleWeight>0.5);
+  behavior.setActivity({state:'thinking'});step();assert.equal(behavior.idleAction,null);
+  behavior.setActivity({state:'idle'});behavior.nextIdle=behavior.time;behavior.setPointer(0,0,true);step();
+  assert.equal(behavior.idleAction,null,'固定视线不能被环顾打断');
+  behavior.setPointer(0,0);behavior.nextIdle=behavior.time;step();behavior.touch('head');step();
+  assert.equal(behavior.idleAction,null,'触摸取消随机动作');
+  step(2);behavior.setSettings({random_idle:false,conversation_actions:false});
+  behavior.nextIdle=behavior.time;behavior.setActivity({state:'speaking'});for(let i=0;i<150;i++)step();
+  assert.equal(behavior.idleAction,null);assert(behavior.activityWeights.speaking<0.001);
+  behavior.setActivity({state:'idle'});behavior.setSettings({random_idle:true});behavior.random=()=>0.9;
+  behavior.nextIdle=behavior.time;step();step(2.75);
+  assert.equal(behavior.idleAction.name,'stretch');assert(behavior.idleWeight>0.99);
+  assert(bones.find(b=>b.name==='右腕').rotation.z< -0.3,'伸展同时抬臂');
+  behavior.suspend();step();assert.equal(behavior.idleAction,null);
+  for(const [name,morph] of [['blush','FaceRed'],['star_eyes','星目'],['heart_eyes','はぁと'],['content','笑い']]) {
+    behavior.setExpression(name);step();assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary[morph]]>0.5);
+  }
   assert(bones.every(b=>b.quaternion.toArray().every(Number.isFinite)));
   console.log('PASS:',form,'眨眼、五元音、眼神方向、转头限幅、呼吸、触摸、VMD 让位及停止恢复');
 }

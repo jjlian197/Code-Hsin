@@ -17,7 +17,7 @@ PARAMETER_RANGES = {
     "ParamEyeLOpen": (0, 1), "ParamEyeROpen": (0, 1),
     "ParamMouthOpenY": (0, 1), "ParamMouthForm": (-1, 1),
 }
-BEHAVIOR_FLAGS = {"auto_blink", "breathing", "mouse_follow", "touch_reactions", "reset_parameters"}
+BEHAVIOR_FLAGS = {"auto_blink", "breathing", "mouse_follow", "touch_reactions", "conversation_actions", "random_idle", "reset_parameters"}
 
 
 class CommandError(ValueError):
@@ -236,7 +236,7 @@ class ControlBridge(QObject):
                 name = data.get("name")
                 if not isinstance(name, str) or name not in view.get_available_expressions():
                     raise CommandError("此模型不支持该表情")
-                view.set_expression(name)
+                window.set_expression(name)
             elif kind == "motion":
                 group = data.get("group")
                 if not isinstance(group, str):

@@ -9,6 +9,8 @@ sprite:
       breathing: true
       mouse_follow: true
       touch_reactions: true
+      conversation_actions: true
+      random_idle: true
     # 外部 MMD 动作按组配置；例如 dance: [motions/example.vmd]
     vmd: {}
   window:

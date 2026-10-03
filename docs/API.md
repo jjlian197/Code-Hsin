@@ -38,13 +38,13 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 | `background` | `type: transparent/purple/有效颜色` | 透明、渐变或纯色背景 |
 | `background` | `type: image`, `path` | 本地图片背景；相对路径以项目根目录为基准 |
 | `model` | `form: first/second` | 异步切换形态，返回 `model_loading`；查询状态确认完成 |
-| `expression` | `name` | normal、happy、sad、angry、surprised、wink、sleepy |
-| `motion` | `group`, `index: 0` | idle、nod、wave；tap 为 wave 的兼容别名；外部 VMD 按配置组与索引播放 |
+| `expression` | `name` | normal、happy、sad、angry、surprised、wink、sleepy、relaxed、blush、content、star_eyes、heart_eyes |
+| `motion` | `group`, `index: 0` | idle、nod、wave、peace（V）、finger_heart（指尖比心）、crossed_arms；tap 为 wave 的兼容别名；外部 VMD 按配置组与索引播放 |
 | `physics` | `action: on/off/reset` | 开关或复位原生 MMD 刚体物理 |
 | `look_at` | `x`, `y`，范围 -1–1 | 固定注视方向；x 正值向屏幕右，y 正值向上 |
 | `parameter` | `id`, `value` | 设置单个受支持参数，兼容 `param_id` |
 | `parameter_batch` | `params` | 一次设置多个参数；先完整验证，错误批次不部分应用 |
-| `behavior` | `auto_blink`, `breathing`, `mouse_follow`, `touch_reactions` | 按需修改布尔开关；可用 `reset_parameters: true` 清除手动参数和固定视线 |
+| `behavior` | `auto_blink`, `breathing`, `mouse_follow`, `touch_reactions`, `conversation_actions`, `random_idle` | 按需修改布尔开关；可用 `reset_parameters: true` 清除手动参数和固定视线 |
 | `blink` | `{}` | 立即眨眼一次 |
 | `lip_sync` | `value: 0–1`, `shape: a/i/u/e/o`, `duration: 50–2000` | 临时口型，duration 为毫秒，默认 250；超时闭合 |
 | `audio` | `action: play`, `path`, `volume: 0–1` | 播放本地原声，以实际 PCM 音量驱动口型；默认音量 0.65 |
@@ -62,6 +62,8 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 `look_at` 持续保持目标，手动注视不受自动鼠标开关限制。发送 `behavior` 中的 `mouse_follow: true` 或 `reset_parameters: true` 可清除固定注视，恢复鼠标采样。`renderer.info.runtime.behavior` 提供实际眼神、眨眼、口型、呼吸、表情权重与最后一次触摸；`audio` 状态提供解码错误、实际音频缓冲数量和播放进度。
 
 基础动作返回 `motion_set`，外部 VMD 返回 `motion_loading`，物理控制返回 `physics_updated`。查询 `renderer.info.runtime` 可得到实际动作、物理开关、步数、刚体/关节数量和骨骼变化；VMD 加载错误位于 `renderer.info.motion_error`。`available_motions` 包含基础动作和已配置的外部动作组。JSON 成功响应说明指令已交给渲染器，异步 VMD 需查询状态确认。
+
+`renderer.info.runtime.behavior.activity` 提供 `idle/thinking/speaking/listening` 和拖动占用状态，`activity_weights` 提供平滑姿态权重，`manual_motion` 标记主动动作，`idle_action` 提供当前环顾或伸展。对话状态由聊天、合成、识别与实际音频播放共同驱动；关闭 `conversation_actions` 只关闭姿态，口型继续工作。`random_idle` 独立控制随机小动作。手动表情会保持，不会被对话状态覆盖。
 
 拖动与点击分开处理。单击实际模型后按命中位置广播头部、身体、手或尾巴；透明空白处不广播。示例：
 

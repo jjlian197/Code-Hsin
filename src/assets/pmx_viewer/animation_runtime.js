@@ -41,6 +41,7 @@ export class AnimationRuntime {
     this.dynamicBodies = this.physics.bodies.filter(b => b.params.type > 0 && b.params.boneIndex >= 0);
     this.restRotations = this.dynamicBodies.map(b => b.bone.quaternion.clone());
     this.behavior = new HsinBehavior(mesh,options.behavior);
+    this.behavior.setActivity(options.activity||{state:'idle'});
     this.mixer.addEventListener('finished', event => {
       if (event.action !== this.activeAction) return;
       // finished 在 mixer 正在遍历绑定时触发；延后处理，避免恢复绑定原姿态。
@@ -57,6 +58,7 @@ export class AnimationRuntime {
     this.finishedAction = null;
     this.motion = group;
     this.behavior.setMotionClip(null);
+    this.behavior.setManualMotion(group!=='idle');
     if (group !== 'idle') {
       this.activeAction = this.mixer.clipAction(this.clips[group]);
       this.activeAction.reset().setLoop(THREE.LoopOnce, 1).play();
@@ -116,6 +118,7 @@ export class AnimationRuntime {
     this.finishedAction = null;
     this.motion = name;
     this.behavior.setMotionClip(clip);
+    this.behavior.setManualMotion(true);
     this.behavior.prepareFrame();
     this.helper.enable('physics', false);
     this.helper.update(0);
@@ -152,6 +155,7 @@ export class AnimationRuntime {
       this.activeAction = this.finishedAction = null;
       this.motion = 'idle';
       this.behavior.setMotionClip(null);
+      this.behavior.setManualMotion(false);
       this.evaluatePose();
     }
     else {

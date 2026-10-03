@@ -46,5 +46,24 @@ for (const [name, boneName, axis] of [['wave','右腕','z'],['nod','頭','x']]) 
   mixer.update(0);
   assert(Math.abs(right.rotation.z-0.67)<0.02,'completion returns directly to relaxed idle');
 }
+for(const name of ['peace','finger_heart','crossed_arms']) {
+  const action=mixer.clipAction(clips[name]).reset().setLoop(THREE.LoopOnce,1).play();
+  for(const track of clips[name].tracks) {
+    assert(new THREE.Quaternion().fromArray(track.values,0).angleTo(new THREE.Quaternion())<1e-5);
+    assert(new THREE.Quaternion().fromArray(track.values,track.values.length-4).angleTo(new THREE.Quaternion())<1e-5);
+  }
+  mixer.update(1.1);mesh.updateMatrixWorld(true);
+  if(name==='peace'||name==='finger_heart')assert(palmNormal(mesh).z>0.95,`${name} palm faces camera`);
+  if(name==='peace')assert(bones.find(b=>b.name==='右薬指２').quaternion.angleTo(new THREE.Quaternion())>0.8,'V 手势收起无名指');
+  if(name==='crossed_arms') {
+    const r=bones.find(b=>b.name==='右手首').getWorldPosition(new THREE.Vector3());
+    const l=bones.find(b=>b.name==='左手首').getWorldPosition(new THREE.Vector3());
+    assert(r.x>1&&l.x< -1&&r.z>2&&l.z>2,'交叉手臂在胸前且跨过身体中心');
+  }
+  for(let i=0;i<100;i++)mixer.update(1/30);
+  action.stop();mixer.update(0);
+  assert(Math.abs(right.rotation.z-0.67)<0.02&&Math.abs(left.rotation.z+0.67)<0.02);
+  assert(bones.filter(b=>/指[１２３]$/.test(b.name)).every(b=>b.quaternion.angleTo(new THREE.Quaternion())<1e-5),'手势结束清除弯指');
+}
 }
 console.log('PASS: both PMX forms, stable idle arms, camera-facing wave, completion and finite poses');

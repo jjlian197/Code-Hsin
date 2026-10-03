@@ -60,10 +60,12 @@ class PmxView(QWidget):
         self._physics_enabled = self._animation_config.get("physics", True)
         self._frame_pending = False
         self._behavior_settings = {"auto_blink": True, "breathing": True, "mouse_follow": True, "touch_reactions": True,
+                                   "conversation_actions": True, "random_idle": True,
                                    **self._animation_config.get("behavior", {})}
         self._manual_gaze = None
         self._audio_input = {"value": 0.0, "active": False}
         self._audio_timestamp = 0.0
+        self._activity_input = {"state": "idle", "interacting": False}
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.web = QWebEngineView(self)
         page = PmxPage(self.web)
@@ -119,7 +121,7 @@ class PmxView(QWidget):
         audio = dict(self._audio_input)
         if audio["active"] and time.monotonic() - self._audio_timestamp > 0.3:
             audio["value"] = 0.0
-        inputs = {"pointer": {**gaze, "manual": self._manual_gaze is not None}, "audio": audio}
+        inputs = {"pointer": {**gaze, "manual": self._manual_gaze is not None}, "audio": audio, "activity": self._activity_input}
         self.web.page().runJavaScript(f"window.HsinPmx.tick(performance.now(), {json.dumps(inputs)});", self._frame_completed)
 
     def _frame_completed(self, result):
@@ -160,7 +162,7 @@ class PmxView(QWidget):
                     raise ValueError("贴图补全文件不存在：" + str(target_path))
                 source_url = url[:url.rfind('/') + 1] + source.replace('\\', '/')
                 overrides[source_url] = QUrl.fromLocalFile(str(target_path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-            options = {"physics": self._physics_enabled, "behavior": self._behavior_settings}
+            options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input}
             self.web.page().runJavaScript(f"window.HsinPmx.loadModel({json.dumps(url)}, {self._request_id}, {json.dumps(overrides)}, {json.dumps(options)});")
 
     @pyqtSlot(int, bool, str)
@@ -179,6 +181,7 @@ class PmxView(QWidget):
             self.label.hide()
             self.web.page().runJavaScript(f"window.HsinPmx.setPaused({json.dumps(not self.isVisible())});")
             self.frame_timer.start()
+            self.set_activity(**self._activity_input, force=True)
             logger.info("PMX 已显示：{}，{}", self.model_path.name, self.model_info)
         else:
             self.frame_timer.stop()
@@ -244,6 +247,15 @@ class PmxView(QWidget):
 
     def blink(self):
         self.web.page().runJavaScript("window.HsinPmx.blink();")
+
+    def set_activity(self, state="idle", interacting=False, *, force=False):
+        value = {"state": state, "interacting": bool(interacting)}
+        # 录音状态信号较频繁，相同状态不重复传输骨骼/物理快照。
+        if not force and value == self._activity_input:
+            return
+        self._activity_input = value
+        if self.model_loaded:
+            self.web.page().runJavaScript(f"window.HsinPmx.setActivity({json.dumps(value)});")
 
     def set_lip_sync(self, value, shape="a", duration=250):
         self.web.page().runJavaScript(f"window.HsinPmx.setLipSync({value}, {json.dumps(shape)}, {duration / 1000});")

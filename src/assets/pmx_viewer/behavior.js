@@ -4,11 +4,14 @@ export const expressions = {
   normal: {}, happy: {'にこり':0.65,'口角上げ左':0.25,'口角上げ右':0.25},
   sad: {'困る':0.7,'悲しい目':0.5}, angry:{'怒り':0.7},
   surprised:{'びっくり':0.65,'お':0.2}, wink:{'ウィンク':1}, sleepy:{'まばたき':0.7},
+  relaxed:{'たれ目':0.3,'にこり２':0.3}, blush:{'FaceRed':0.8,'照れ':0.65,'にこり':0.25},
+  content:{'笑い':0.8,'にこり':0.55,'口角上げ左':0.25,'口角上げ右':0.25},
+  star_eyes:{'星目':1,'星目2':1}, heart_eyes:{'はぁと':1,'はぁと2':1},
 };
 const vowels = {a:'あ',i:'い',u:'う',e:'え',o:'お'};
 export const behaviorMorphNames = [...new Set([
   ...Object.values(expressions).flatMap(v=>Object.keys(v)), ...Object.values(vowels),
-  'Left','Right','Up','Down','ウィンク右','笑い','口角下げ左','口角下げ右',
+  'Left','Right','Up','Down','ウィンク右','笑い','口角下げ左','口角下げ右','真面目',
 ])];
 const clamp = (v,a=0,b=1)=>Math.min(b,Math.max(a,v));
 const smooth = (v,target,speed,delta)=>v+(target-v)*(1-Math.exp(-speed*delta));
@@ -17,7 +20,7 @@ const radians = v=>v*Math.PI/180;
 export class HsinBehavior {
   constructor(mesh,options={},random=Math.random) {
     this.mesh=mesh;this.random=random;this.time=0;
-    this.settings={auto_blink:true,breathing:true,mouse_follow:true,touch_reactions:true,...options};
+    this.settings={auto_blink:true,breathing:true,mouse_follow:true,touch_reactions:true,conversation_actions:true,random_idle:true,...options};
     this.parameters={};this.expression='normal';this.pointer={x:0,y:0};this.manualLook=false;this.gaze={x:0,y:0};
     this.bones=new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
     this.boneBases=new Map();this.morphBases=new Map();this.ownedBones=new Set();this.ownedMorphs=new Set();
@@ -25,6 +28,9 @@ export class HsinBehavior {
     this.audio={value:0,active:false};this.lip={value:0,shape:'a',until:0};
     this.touchState=null;this.lastTouch=null;this.touchWeight=0;this.mouthOpen=0;this.mouthShape='a';
     this.offsetQuaternion=new THREE.Quaternion();this.offsetEuler=new THREE.Euler();
+    this.activity={state:'idle',interacting:false};this.manualMotion=false;
+    this.activityWeights={thinking:0,speaking:0,listening:0};
+    this.idleAction=null;this.idleWeight=0;this.nextIdle=this.time+18+this.random()*27;
   }
 
   setExpression(name) { if(!(name in expressions))return false;this.expression=name;return true; }
@@ -34,6 +40,13 @@ export class HsinBehavior {
   setAudio(value,active) { this.audio={value:clamp(value),active}; }
   setLip(value,shape='a',duration=0.25) { this.lip={value:clamp(value),shape,until:this.time+duration}; }
   setSettings(settings) { Object.assign(this.settings,settings); }
+  setActivity(activity) {
+    if(!['idle','thinking','speaking','listening'].includes(activity.state))return false;
+    this.activity={state:activity.state,interacting:!!activity.interacting};return true;
+  }
+  setManualMotion(active) { this.manualMotion=active;if(active)this.cancelIdle(); }
+  cancelIdle() { this.idleAction=null;this.idleWeight=0;this.nextIdle=this.time+18+this.random()*27; }
+  suspend() { this.cancelIdle(); }
   forceBlink() { this.blinkStart=this.time; }
 
   setMotionClip(clip) {
@@ -70,6 +83,21 @@ export class HsinBehavior {
     const targetMouth=this.audio.active?this.audio.value:lipActive?this.lip.value:(this.parameters.ParamMouthOpenY??0);
     this.mouthOpen=smooth(this.mouthOpen,targetMouth,targetMouth>this.mouthOpen?22:14,delta);
     this.mouthShape=lipActive?this.lip.shape:'a';
+    const occupied=this.manualMotion||this.activity.interacting||!!this.touchState;
+    for(const state of Object.keys(this.activityWeights)) {
+      const target=this.settings.conversation_actions&&!occupied&&this.activity.state===state?1:0;
+      this.activityWeights[state]=smooth(this.activityWeights[state],target,6,delta);
+    }
+    const fixedLook=this.manualLook||['ParamAngleX','ParamAngleY','ParamAngleZ','ParamEyeBallX','ParamEyeBallY'].some(p=>p in this.parameters);
+    const eligible=this.settings.random_idle&&!occupied&&!fixedLook&&this.activity.state==='idle'&&!this.audio.active;
+    if(!eligible) { if(this.idleAction)this.cancelIdle();this.nextIdle=this.time+18+this.random()*27; }
+    else if(this.idleAction) {
+      const progress=(this.time-this.idleAction.start)/this.idleAction.duration;
+      this.idleWeight=Math.sin(Math.PI*clamp(progress))**2;
+      if(progress>=1)this.cancelIdle();
+    }else if(this.time>=this.nextIdle) {
+      this.idleAction={name:this.random()<0.6?'look_around':'stretch',start:this.time,duration:5.5};
+    }
   }
 
   prepareFrame() {
@@ -96,6 +124,24 @@ export class HsinBehavior {
     this.rotate('頭',pitch*0.8,yaw*0.8,roll*0.8+(this.touchState?.part==='head'?0.07*this.touchWeight:0));
     this.rotate('上半身',this.breath*0.009+bodyY,bodyX,0);
     this.rotate('上半身2',this.breath*0.008,0,this.touchState?.part==='body'?0.025*this.touchWeight:0);
+    // 手动动作、VMD、拖动与触摸优先，自动姿态不会改写它们。
+    if(!this.manualMotion&&!this.activity.interacting&&!this.touchState) {
+      const {thinking,speaking,listening}=this.activityWeights;
+      this.rotate('頭',thinking*0.05-listening*0.035,thinking*0.1,listening*-0.09);
+      this.rotate('上半身2',-listening*0.025,0,speaking*0.012*Math.sin(this.time*1.6));
+      this.rotate('右腕',0,-thinking*0.045,-speaking*(0.12+0.025*Math.sin(this.time*2)));
+      this.rotate('右ひじ',-speaking*0.13,0,-thinking*0.08-speaking*0.06);
+      this.rotate('右手首',0,speaking*0.06*Math.sin(this.time*1.7),0);
+      if(this.idleAction) {
+        const w=this.idleWeight;
+        if(this.idleAction.name==='look_around')this.rotate('頭',0,0.24*Math.sin((this.time-this.idleAction.start)*1.5)*w,0.025*w);
+        else {
+          this.rotate('上半身2',-0.045*w,0,0);this.rotate('頭',-0.05*w,0,0);
+          this.rotate('右肩',0,0,-0.06*w);this.rotate('左肩',0,0,0.06*w);
+          this.rotate('右腕',0,0,-0.32*w);this.rotate('左腕',0,0,0.32*w);
+        }
+      }
+    }
     const torso=this.bones.get('上半身');
     if(torso&&!this.ownedBones.has('上半身.position')) {
       if(!this.boneBases.has(torso))this.boneBases.set(torso,{quaternion:torso.quaternion.clone(),position:torso.position.clone()});
@@ -119,7 +165,7 @@ export class HsinBehavior {
       // 已闭合的一侧不再叠加双眼眨眼，避免眼睑超量变形。
       this.morph('ウィンク右',Math.max(closure,right));
     }else {
-      this.morph('まばたき',closure);
+      this.morph('まばたき',closure*(this.expression==='content'?0.2:1));
       this.morph('ウィンク',Math.max(0,left-closure));this.morph('ウィンク右',Math.max(0,right-closure));
     }
     // 模型的 Left 在 Three.js 正面相机中向屏幕右移动，已核对 PMX 顶点位移。
@@ -129,6 +175,11 @@ export class HsinBehavior {
     const smile=p.ParamMouthForm??0;
     this.morph('口角上げ左',Math.max(smile,0)*0.5);this.morph('口角上げ右',Math.max(smile,0)*0.5);
     this.morph('口角下げ左',Math.max(-smile,0)*0.5);this.morph('口角下げ右',Math.max(-smile,0)*0.5);
+    if(this.expression==='normal'&&!this.manualMotion&&!this.activity.interacting&&!this.touchState) {
+      this.morph('真面目',this.activityWeights.thinking*0.18);
+      this.morph('にこり',this.activityWeights.speaking*0.15);
+      this.morph('たれ目',this.activityWeights.listening*0.14);
+    }
     if(this.touchState) {
       if(this.touchState.part==='tail'){this.morph('びっくり',this.touchWeight*0.3);this.morph('お',this.touchWeight*0.25);}
       else {this.morph('にこり',this.touchWeight*0.5);this.morph('口角上げ左',this.touchWeight*0.4);this.morph('口角上げ右',this.touchWeight*0.4);}
@@ -139,6 +190,8 @@ export class HsinBehavior {
     const morphs={};for(const name of behaviorMorphNames){const index=this.mesh.morphTargetDictionary[name];if(index!==undefined)morphs[name]=this.mesh.morphTargetInfluences[index];}
     return {settings:{...this.settings},expression:this.expression,gaze:{...this.gaze},pointer:{...this.pointer},
       blink:this.blink,breath:this.breath,mouth_open:this.mouthOpen,mouth_shape:this.mouthShape,audio_driven:this.audio.active,
-      parameters:{...this.parameters},last_touch:this.lastTouch,touch_active:!!this.touchState,morphs};
+      parameters:{...this.parameters},last_touch:this.lastTouch,touch_active:!!this.touchState,
+      activity:{...this.activity},activity_weights:{...this.activityWeights},manual_motion:this.manualMotion,
+      idle_action:this.idleAction?.name||null,idle_weight:this.idleWeight,next_idle:this.nextIdle,morphs};
   }
 }

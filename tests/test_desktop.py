@@ -120,6 +120,32 @@ class DesktopTest(QtWindowTestCase):
         state = json.loads((Path(self.temp.name) / "window.json").read_text())
         self.assertEqual(state, {"x": 100, "y": 100})
 
+    def test_companion_priority_and_drag_release(self):
+        from unittest.mock import Mock, patch
+        from PyQt6.QtMultimedia import QMediaPlayer
+        view = self.window.sprite_view
+        view.renderer_name = "pmx"
+        view.set_activity = Mock()
+        stt = {"enabled": True, "listening": True, "blocked": False, "recognizing": False}
+        with patch.object(self.window.stt, "snapshot", return_value=stt), patch.object(self.window.tts, "snapshot", return_value={"synthesizing": False}):
+            self.window._sync_companion()
+            view.set_activity.assert_called_with("listening", False)
+            self.window.chat.busy = True
+            self.window._sync_companion()
+            view.set_activity.assert_called_with("thinking", False)
+            with patch.object(self.window.voice_player.player, "playbackState", return_value=QMediaPlayer.PlaybackState.PlayingState):
+                self.window._sync_companion()
+                view.set_activity.assert_called_with("speaking", False)
+            self.window.chat.busy = False
+            stt["recognizing"] = True
+            self.window.drag_position = QPoint(10, 10)
+            self.window._sync_companion()
+            view.set_activity.assert_called_with("thinking", True)
+            stt.update(recognizing=False, enabled=False, listening=False)
+            self.window.set_click_through(True)
+            view.set_activity.assert_called_with("idle", False)
+        view.renderer_name = "placeholder"
+
 
 class APITest(QtWindowTestCase):
     def setUp(self):

@@ -21,7 +21,7 @@ def main():
     config["runtime"]["directory"] = temp.name
     config["voice"]["enabled"] = False
     config["sprite"]["animation"]["behavior"] = dict.fromkeys(
-        ("auto_blink", "breathing", "mouse_follow", "touch_reactions"), False)
+        ("auto_blink", "breathing", "mouse_follow", "touch_reactions", "conversation_actions", "random_idle"), False)
     window = HsinSpriteWindow(config)
     probe = GuiProbe(window)
     window.show_sprite()

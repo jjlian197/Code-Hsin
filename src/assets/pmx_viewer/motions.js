@@ -16,6 +16,10 @@ export function createBuiltinClips(mesh) {
     ...track('左腕', t, t.map(v => [0, 0, -0.67 - Math.sin(v * Math.PI / 2) * 0.008])),
     ...track('右ひじ', t, t.map(() => [0, 0, 0])),
     ...track('右手首', t, t.map(() => [0, 0, 0])),
+    ...track('左ひじ', t, t.map(() => [0, 0, 0])),
+    ...track('左手首', t, t.map(() => [0, 0, 0])),
+    ...mesh.skeleton.bones.filter(b => /^[右左](親|人|中|薬|小)指[０１２３]$/.test(b.name))
+      .flatMap(b => track(b.name, t, t.map(() => [0,0,0]))),
     ...track('上半身', t, t.map(v => [0, 0, 0])),
     ...track('上半身2', t, t.map(v => [0, 0, 0])),
     ...track('頭', t, t.map(v => [0, 0, 0])),
@@ -24,17 +28,17 @@ export function createBuiltinClips(mesh) {
     track('頭', [0, 0.3, 0.6, 0.9, 1.2, 1.6], [[0], [0.18], [-0.04], [0.15], [0.02], [0]]));
   const wave = createWaveClip(mesh);
   nod.blendMode = wave.blendMode = THREE.AdditiveAnimationBlendMode;
-  return { idle, nod, wave };
+  return { idle, nod, wave, ...createGestureClips(mesh) };
 }
 
 // 用真实手指方向建立掌面坐标系，避免把手腕某个欧拉轴误当作掌心方向。
-export function palmNormal(mesh) {
+export function palmNormal(mesh, side='右') {
   const bones = new Map(mesh.skeleton.bones.map(b => [b.name, b]));
   const position = name => bones.get(name)?.getWorldPosition(new THREE.Vector3());
-  const wrist = position('右手首'), middle = position('右中指２');
-  const index = position('右人指１'), little = position('右小指１');
+  const wrist = position(side+'手首'), middle = position(side+'中指２');
+  const index = position(side+'人指１'), little = position(side+'小指１');
   if (!wrist || !middle || !index || !little) return null;
-  return new THREE.Vector3().crossVectors(index.sub(little), middle.sub(wrist)).normalize();
+  return new THREE.Vector3().crossVectors(index.sub(little), middle.sub(wrist)).normalize().multiplyScalar(side==='右'?1:-1);
 }
 
 function createWaveClip(mesh) {
@@ -96,5 +100,104 @@ function createWaveClip(mesh) {
   } finally {
     initial.forEach((q, bone) => bone.quaternion.copy(q));
     update();
+  }
+}
+
+// 用真实关节位置求肩/肘方向，手指弯向掌心，不依赖模型局部轴猜测。
+function createGestureClips(mesh) {
+  const bones=new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
+  const initial=new Map(mesh.skeleton.bones.map(b=>[b,b.quaternion.clone()]));
+  const names=[...bones.keys()].filter(n=>/^[右左](腕|ひじ|手首|(親|人|中|薬|小)指[０１２３])$/.test(n));
+  const update=()=>mesh.updateMatrixWorld(true);
+  const position=n=>bones.get(n).getWorldPosition(new THREE.Vector3());
+  const worldRotation=(name,q)=>{
+    const b=bones.get(name);b.quaternion.copy(b.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(q));update();
+  };
+  const aim=(name,child,direction)=>{
+    const delta=new THREE.Quaternion().setFromUnitVectors(position(child).sub(position(name)).normalize(),direction.clone().normalize());
+    worldRotation(name,delta.multiply(bones.get(name).getWorldQuaternion(new THREE.Quaternion())));
+  };
+  const frames=new Map();
+  let curlNormal=new THREE.Vector3(0,0,1);
+  const setPalm=(side,up,normal=new THREE.Vector3(0,0,1))=>{
+    const [frame,wrist]=frames.get(side);
+    up=up.clone().normalize();
+    const target=new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3().crossVectors(up,normal).normalize(),up,normal));
+    worldRotation(side+'手首',target.multiply(frame.clone().invert()).multiply(wrist));
+  };
+  const bend=(name,child,angle)=>{
+    const direction=position(child).sub(position(name)).normalize();
+    const axis=new THREE.Vector3().crossVectors(direction,curlNormal).normalize();
+    worldRotation(name,new THREE.Quaternion().setFromAxisAngle(axis,angle)
+      .multiply(bones.get(name).getWorldQuaternion(new THREE.Quaternion())));
+  };
+  const curl=(side,finger,angles)=>{
+    const joints=['１','２','３','先'];
+    angles.forEach((angle,i)=>bend(side+finger+'指'+joints[i],side+finger+'指'+joints[i+1],angle));
+  };
+  const raised=()=>{
+    aim('右腕','右ひじ',new THREE.Vector3(-0.9,-0.3,0.12));
+    aim('右ひじ','右手首',new THREE.Vector3(0.12,1,0.15));
+    setPalm('右',new THREE.Vector3(-0.08,1,0));
+  };
+  const reachBones=(root,joint,end,target,hint)=>{
+    const s=position(root),e=position(joint),w=position(end);
+    const l1=s.distanceTo(e),l2=e.distanceTo(w),direction=target.clone().sub(s);
+    const distance=THREE.MathUtils.clamp(direction.length(),Math.abs(l1-l2)+0.05,l1+l2-0.05);
+    direction.normalize();const a=(l1*l1-l2*l2+distance*distance)/(2*distance);
+    const outside=hint.clone().sub(direction.clone().multiplyScalar(hint.dot(direction))).normalize();
+    const desired=s.clone().addScaledVector(direction,a).addScaledVector(outside,Math.sqrt(Math.max(0,l1*l1-a*a)));
+    aim(root,joint,desired.sub(s));
+    aim(joint,end,target.clone().sub(position(joint)));
+  };
+  const reach=(side,target,hint)=>reachBones(side+'腕',side+'ひじ',side+'手首',target,hint);
+  try {
+    bones.get('右腕').quaternion.setFromEuler(new THREE.Euler(0,0,0.67));
+    bones.get('左腕').quaternion.setFromEuler(new THREE.Euler(0,0,-0.67));update();
+    const rest=new Map(names.map(n=>[n,bones.get(n).quaternion.clone()]));
+    for(const side of ['右','左']) {
+      const up=position(side+'中指２').sub(position(side+'手首')).normalize(),normal=palmNormal(mesh,side);
+      frames.set(side,[new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+        new THREE.Vector3().crossVectors(up,normal).normalize(),up,normal)),bones.get(side+'手首').getWorldQuaternion(new THREE.Quaternion())]);
+    }
+    const clip=(name,pose)=>{
+      curlNormal.set(0,0,1);
+      for(const [n,q] of rest)bones.get(n).quaternion.copy(q);update();pose();
+      const times=[0,0.45,0.9,2.6,3.6],weights=[0,0.5,1,1,0];
+      const tracks=names.map(n=>{
+        const delta=rest.get(n).clone().invert().multiply(bones.get(n).quaternion).normalize();
+        return new THREE.QuaternionKeyframeTrack(`.bones[${n}].quaternion`,times,
+          weights.flatMap(w=>new THREE.Quaternion().slerp(delta,w).toArray()));
+      });
+      const value=new THREE.AnimationClip(name,3.6,tracks);value.blendMode=THREE.AdditiveAnimationBlendMode;return value;
+    };
+    const peace=clip('peace',()=>{
+      raised();curl('右','薬',[0.85,1.05,0.65]);curl('右','小',[0.9,1.0,0.65]);
+      bend('右親指１','右親指２',0.85);bend('右親指２','右親指先',0.5);
+      for(const [finger,spread] of [['人',-0.12],['中',0.12]]) {
+        const name='右'+finger+'指１';worldRotation(name,new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),spread)
+          .multiply(bones.get(name).getWorldQuaternion(new THREE.Quaternion())));
+      }
+    });
+    const fingerHeart=clip('finger_heart',()=>{
+      raised();for(const finger of ['中','薬','小'])curl('右',finger,[0.85,1.05,0.7]);
+      aim('右人指１','右人指２',new THREE.Vector3(.6,.6,.45));
+      bend('右人指２','右人指３',.85);bend('右人指３','右人指先',.35);
+      // 拇指尖跨过食指第一节，保留前后距离，避免两指网格穿插。
+      const target=position('右人指２').add(new THREE.Vector3(-.10,.04,.18));
+      reachBones('右親指１','右親指２','右親指先',target,new THREE.Vector3(.8,0,.2));
+    });
+    const crossed=clip('crossed_arms',()=>{
+      const chest=position('上半身2');
+      reach('右',new THREE.Vector3(1.25,chest.y-0.15,2.25),new THREE.Vector3(-1.5,-1,0.8));
+      reach('左',new THREE.Vector3(-1.25,chest.y-0.7,2.65),new THREE.Vector3(1.5,-1,0.8));
+      curlNormal.set(0,0,-1);
+      setPalm('右',new THREE.Vector3(1,0,0),curlNormal);setPalm('左',new THREE.Vector3(-1,0,0),curlNormal);
+      for(const side of ['右','左'])for(const finger of ['人','中','薬','小'])curl(side,finger,[0.2,0.22,0.15]);
+    });
+    return {peace,finger_heart:fingerHeart,crossed_arms:crossed};
+  } finally {
+    initial.forEach((q,b)=>b.quaternion.copy(q));update();
   }
 }

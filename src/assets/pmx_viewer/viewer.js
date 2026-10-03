@@ -32,6 +32,7 @@ function animate(now,inputs={}){
   if(runtime && !runtime.paused){
     if(inputs.pointer)runtime.behavior.setPointer(inputs.pointer.x,inputs.pointer.y,inputs.pointer.manual||false);
     if(inputs.audio)runtime.behavior.setAudio(inputs.audio.value,inputs.audio.active);
+    if(inputs.activity)runtime.behavior.setActivity(inputs.activity);
     runtime.update(delta);render();
   }
   if(now-lastReport>500){lastReport=now;reportRuntime();}
@@ -107,7 +108,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
       bones:data.metadata.boneCount,materials:data.metadata.materialCount,morphs:originalMorphCount,
       active_morphs:data.morphs.length,expressions:supported,texture_errors:0,
       texture_overrides:Object.keys(textureOverrides).length,
-      material_alpha:materialInfo,motions:['idle','nod','wave'],runtime:runtime.snapshot()};
+      material_alpha:materialInfo,motions:Object.keys(runtime.clips),runtime:runtime.snapshot()};
     render();bridge.modelResult(requestId,true,JSON.stringify(info));
   }catch(error){
     dispose(candidate);
@@ -169,10 +170,11 @@ window.HsinPmx={loadModel,setExpression,playMotion,
   },
   blink:()=>runtime?.behavior.forceBlink(),
   setLipSync:(value,shape,duration)=>runtime?.behavior.setLip(value,shape,duration),
+  setActivity:activity=>{runtime?.behavior.setActivity(activity);reportRuntime();},
   tick:animate,
   setPhysics:enabled=>{if(runtime){runtime.setPhysics(enabled);reportRuntime();}},
   resetPhysics:()=>{if(runtime){runtime.resetPhysics();reportRuntime();}},
-  setPaused:paused=>{if(runtime){runtime.paused=paused;lastFrame=0;reportRuntime();}},
+  setPaused:paused=>{if(runtime){runtime.paused=paused;runtime.behavior.suspend();lastFrame=0;reportRuntime();}},
   snapshot:()=>runtime?.snapshot(),
   dispose:()=>{stopped=true;generation++;dispose(mesh);mesh=null;renderer.dispose();}};
 new QWebChannel(qt.webChannelTransport,channel=>{bridge=channel.objects.pmxBridge;bridge.viewerReady();});

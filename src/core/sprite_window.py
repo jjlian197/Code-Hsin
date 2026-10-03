@@ -21,6 +21,10 @@ from src.ui.background_frame import BackgroundFrame
 from src.ui.bubble_widget import BubbleWidget
 from src.ui.fonts import ensure_fonts
 
+EXPRESSION_LABELS = {"normal": "平常", "happy": "开心", "sad": "难过", "angry": "生气", "surprised": "惊讶",
+                     "wink": "眨单眼", "sleepy": "困倦", "relaxed": "放松", "blush": "脸红",
+                     "content": "笑眯眯", "star_eyes": "星星眼", "heart_eyes": "爱心眼"}
+
 
 class HsinSpriteWindow(QMainWindow):
     touch_event = pyqtSignal(str, str)
@@ -64,6 +68,11 @@ class HsinSpriteWindow(QMainWindow):
         self._last_spoken_touch = 0
         if self.sprite_view.renderer_name == "pmx":
             self.voice_player.level_changed.connect(self.sprite_view.audio_level)
+            self.chat.changed.connect(self._sync_companion)
+            self.tts.changed.connect(self._sync_companion)
+            self.stt.changed.connect(self._sync_companion)
+            self.voice_player.player.playbackStateChanged.connect(self._sync_companion)
+            self.sprite_view.load_finished.connect(self._model_actions_ready)
         self._setup_tray()
         self.tts.changed.connect(self._refresh_voice_menu)
         self.chat.changed.connect(self._refresh_chat_menu)
@@ -156,8 +165,31 @@ class HsinSpriteWindow(QMainWindow):
             size_menu.addAction(label, lambda checked=False, s=scale: self._resize_scale(s))
         if self.sprite_view.renderer_name == "pmx":
             motions_menu = menu.addMenu("动作")
-            for key, label in (("idle", "待机"), ("nod", "点头"), ("wave", "挥手")):
-                motions_menu.addAction(label, lambda checked=False, group=key: self._play_motion(group))
+            self._motion_actions = {}
+            for key, label in (("idle", "待机"), ("nod", "点头"), ("wave", "挥手"),
+                               ("peace", "V 手势"), ("finger_heart", "指尖比心"), ("crossed_arms", "交叉手臂")):
+                action = motions_menu.addAction(label, lambda checked=False, group=key: self._play_motion(group))
+                action.setEnabled(False)
+                self._motion_actions[key] = action
+            expressions_menu = menu.addMenu("表情")
+            expression_group = QActionGroup(expressions_menu)
+            expression_group.setExclusive(True)
+            self._expression_actions = {}
+            for key, label in EXPRESSION_LABELS.items():
+                action = expressions_menu.addAction(label)
+                action.setCheckable(True)
+                action.setEnabled(False)
+                expression_group.addAction(action)
+                action.triggered.connect(lambda checked, name=key: self.set_expression(name))
+                self._expression_actions[key] = action
+            companion_menu = menu.addMenu("陪伴动作")
+            self._companion_actions = {}
+            for key, label in (("conversation_actions", "对话时思考、倾听和说话手势"), ("random_idle", "随机环顾和轻微伸展")):
+                action = companion_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(self.sprite_view._behavior_settings[key])
+                action.triggered.connect(lambda enabled, setting=key: self.set_behavior({setting: enabled}))
+                self._companion_actions[key] = action
             self._physics_action = QAction("头发与衣摆物理", self)
             self._physics_action.setCheckable(True)
             self._physics_action.setChecked(self.sprite_view._physics_enabled)
@@ -235,6 +267,38 @@ class HsinSpriteWindow(QMainWindow):
         if self.tts.language != self._chat_language:
             self._chat_language = self.tts.language
             self.chat.stop()
+
+    def _sync_companion(self, *_):
+        if self.sprite_view.renderer_name != "pmx":
+            return
+        from PyQt6.QtMultimedia import QMediaPlayer
+        playing = self.voice_player.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        stt = self.stt.snapshot()
+        if playing:
+            state = "speaking"
+        elif self.chat.busy or self.tts.snapshot()["synthesizing"] or stt["recognizing"]:
+            state = "thinking"
+        elif stt["listening"] and stt["enabled"] and not stt["blocked"]:
+            state = "listening"
+        else:
+            state = "idle"
+        self.sprite_view.set_activity(state, self.drag_position is not None)
+
+    def _model_actions_ready(self, success):
+        if self.sprite_view.renderer_name != "pmx":
+            return
+        for name, action in self._motion_actions.items():
+            action.setEnabled(success and name in self.sprite_view.get_available_motions())
+        for name, action in self._expression_actions.items():
+            action.setEnabled(success and name in self.sprite_view.get_available_expressions())
+            action.setChecked(name == self.sprite_view.current_expression)
+        self._sync_companion()
+
+    def set_expression(self, name):
+        self.sprite_view.set_expression(name)
+        if hasattr(self, "_expression_actions"):
+            for key, action in self._expression_actions.items():
+                action.setChecked(key == name)
 
     def _sync_microphone(self, *_):
         from PyQt6.QtMultimedia import QMediaPlayer
@@ -316,6 +380,7 @@ class HsinSpriteWindow(QMainWindow):
             widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
         self.drag_position = None
+        self._sync_companion()
         # 修改原生标志会隐藏窗口，仅恢复原本可见的窗口。
         if visible:
             self.show()
@@ -366,6 +431,7 @@ class HsinSpriteWindow(QMainWindow):
         forms = self.config["sprite"]["model"]["forms"]
         if form not in forms:
             raise ValueError("未知形态，需要 first 或 second")
+        self._model_actions_ready(False)
         self.sprite_view.load_model(project_path(forms[form]))
 
     def _play_motion(self, group):
@@ -382,6 +448,8 @@ class HsinSpriteWindow(QMainWindow):
 
     def set_behavior(self, settings):
         self.sprite_view.set_behavior(settings)
+        for key, action in getattr(self, "_companion_actions", {}).items():
+            action.setChecked(self.sprite_view._behavior_settings[key])
         if "mouse_follow" in settings:
             self._follow_action.setChecked(settings["mouse_follow"])
 
@@ -440,6 +508,7 @@ class HsinSpriteWindow(QMainWindow):
                 self._press_point = event.globalPosition().toPoint()
                 self.drag_position = self._press_point - self.frameGeometry().topLeft()
                 self._dragged = False
+                self._sync_companion()
                 return True
             if event.button() == Qt.MouseButton.RightButton:
                 self._tray_menu.exec(event.globalPosition().toPoint())
@@ -461,6 +530,7 @@ class HsinSpriteWindow(QMainWindow):
                     else:
                         self.touch_event.emit("tap", "身体")
                 self.drag_position = None
+                self._sync_companion()
                 return True
         return False
 

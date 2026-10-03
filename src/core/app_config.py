@@ -85,11 +85,11 @@ def load_config(path=None):
     if not isinstance(animation.get("vmd", {}), dict):
         raise ValueError("animation.vmd 需要动作组对象")
     behavior = animation.get("behavior", {})
-    if not isinstance(behavior, dict) or any(k not in {"auto_blink", "breathing", "mouse_follow", "touch_reactions"}
+    if not isinstance(behavior, dict) or any(k not in {"auto_blink", "breathing", "mouse_follow", "touch_reactions", "conversation_actions", "random_idle"}
             or type(v) is not bool for k, v in behavior.items()):
-        raise ValueError("animation.behavior 只支持四个布尔值设置")
+        raise ValueError("animation.behavior 需要受支持的布尔值设置")
     for group, files in animation.get("vmd", {}).items():
-        if not isinstance(group, str) or not group or group in {"idle", "wave", "nod", "tap"}:
+        if not isinstance(group, str) or not group or group in {"idle", "wave", "nod", "tap", "peace", "finger_heart", "crossed_arms"}:
             raise ValueError("VMD 动作组名称不能占用基础动作名")
         if not isinstance(files, list) or not files or any(not isinstance(f, str) or not f for f in files):
             raise ValueError("VMD 动作组需要非空文件路径列表")
