@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -15,7 +16,8 @@ import wave
 from loguru import logger
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
-from src.core.app_config import PROJECT_ROOT, project_path
+from src.core.app_config import project_path
+from src.core.preset_voice import PresetVoice
 from src.core.voice_auxiliary import EdgeSynthesizer, VoiceTranslator
 
 
@@ -46,6 +48,7 @@ class LocalSynthesizer:
         self.process = None
         self.process_lock = threading.Lock()
         self.closed = threading.Event()
+        self.presets = PresetVoice()
 
     def health(self):
         with urllib.request.urlopen(self.base + "/health", timeout=2) as response:
@@ -73,12 +76,25 @@ class LocalSynthesizer:
                            TORCH_HOME=str(temp / "torch"), HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
                 env.update(OMP_NUM_THREADS="2", MKL_NUM_THREADS="2")
                 env["PATH"] = data["installation"]["gptsovits_root"] + os.pathsep + env.get("PATH", "")
+                frozen_windows = os.name == "nt" and getattr(sys, "frozen", False)
+                if frozen_windows:
+                    # 外部 GPT 环境不能继承冻结程序的 DLL 搜索目录或 Qt PATH。
+                    import ctypes
+                    bundle_root = Path(sys._MEIPASS).resolve()
+                    env["PATH"] = os.pathsep.join(item for item in env["PATH"].split(os.pathsep)
+                        if item and not Path(item).resolve().is_relative_to(bundle_root))
                 with (self.runtime / "server.log").open("ab") as log:
-                    self.process = subprocess.Popen([data["installation"]["python"], "-u", "-s",
-                        str(PROJECT_ROOT / "tools/hsin_voice_server.py"), "--profiles", str(self.profiles_path),
-                        "--runtime", str(self.runtime), "--port", str(self.port)],
-                        cwd=data["installation"]["gptsovits_root"], env=env, stdout=log, stderr=log,
-                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    if frozen_windows:
+                        ctypes.windll.kernel32.SetDllDirectoryW(None)
+                    try:
+                        self.process = subprocess.Popen([data["installation"]["python"], "-u", "-s",
+                            str(project_path("tools/hsin_voice_server.py")), "--profiles", str(self.profiles_path),
+                            "--runtime", str(self.runtime), "--port", str(self.port)],
+                            cwd=data["installation"]["gptsovits_root"], env=env, stdout=log, stderr=log,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                    finally:
+                        if frozen_windows:
+                            ctypes.windll.kernel32.SetDllDirectoryW(str(bundle_root))
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and not self.closed.wait(0.15):
             try:
@@ -92,6 +108,12 @@ class LocalSynthesizer:
         raise RuntimeError("语音服务启动超时或已退出")
 
     def synthesize(self, text, language, speed):
+        preset = self.presets.find(text, language, speed)
+        if preset:
+            wave_info(preset.read_bytes())
+            return preset
+        if not self.profiles_path.is_file():
+            raise RuntimeError("这段文字不在预存语音中；请导入 GPT-SoVITS 音色配置，或选择 Edge 联网语音")
         data = json.loads(self.profiles_path.read_text(encoding="utf8"))
         profile = data["profiles"][language]
         key = cache_key(text, language, speed, profile)
@@ -122,6 +144,17 @@ class LocalSynthesizer:
         temp.replace(path)
         return path
 
+    def warmup(self, language):
+        data = json.loads(self.profiles_path.read_text(encoding="utf8"))
+        self.ensure_server(data)
+        # 独立端点强制做一次推理，不能由磁盘音频缓存代替模型预热。
+        request = urllib.request.Request(self.base + "/warmup", data=json.dumps({"language": language}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=180) as response:
+            result = json.load(response)
+        if result.get("language") != language or result.get("ready") is not True:
+            raise RuntimeError("语音预热未完成")
+
     def close(self):
         self.closed.set()
         with self.process_lock:
@@ -140,6 +173,7 @@ class TTSManager(QObject):
     speech_started = pyqtSignal(str)
     failed = pyqtSignal(str)
     stage_changed = pyqtSignal(int, str)
+    warmup_completed = pyqtSignal(str, object)
 
     def __init__(self, config, player, parent=None):
         super().__init__(parent)
@@ -184,11 +218,19 @@ class TTSManager(QObject):
         self._ready = deque()
         self._pending = self._prefetched = self._sequence = 0
         self._playing = self._starting = self._finishing = False
+        self._announced = False
         self._stream = None
+        self._stream_source = None
+        self._playing_segment = None
+        self._playing_text = ""
         self._stream_open = False
         self._stream_language = None
+        self._warmup_language = self._warmup_target = None
+        self._prewarm_enabled = False
+        self.warmup_state, self.warmup_error = "idle", None
         self.completed.connect(self._complete, Qt.ConnectionType.QueuedConnection)
         self.stage_changed.connect(self._stage, Qt.ConnectionType.QueuedConnection)
+        self.warmup_completed.connect(self._warmup_complete, Qt.ConnectionType.QueuedConnection)
         if hasattr(self.player, "player"):
             self.player.player.playbackStateChanged.connect(self._playback_state)
             self.player.player.errorOccurred.connect(self._playback_error)
@@ -196,17 +238,39 @@ class TTSManager(QObject):
         self._worker.start()
 
     def snapshot(self):
-        available = {"gptsovits": self.profiles_path.is_file(), "edge": self.edge.available()}
+        available = {"gptsovits": self.profiles_path.is_file() or self.provider.presets.available(), "edge": self.edge.available()}
         configured = available[self.engine] or (self.fallback and any(available.values()))
         return {"enabled": self.enabled, "configured": configured,
                 "language": self.language, "languages": ["zh", "ja"], "provider": self.engine,
                 "providers": available, "actual_provider": self.actual_provider,
+                "preset_voice": self.provider.presets.available(), "trained_voice": self.profiles_path.is_file(),
                 "auto_translate": self.auto_translate, "fallback": self.fallback,
                 "stage": self.stage, "warning": self.warning,
                 "synthesizing": self.busy, "last_request": self.last_request, "error": self.error,
                 "streaming": self._stream is not None, "stream_open": self._stream_open,
                 "queued_segments": self._pending, "ready_segments": len(self._ready),
+                "playing_segment": self._playing_segment if self._playing else None, "playing_text": self._playing_text if self._playing else "",
+                "warmup": {"state": self.warmup_state, "language": self._warmup_target, "error": self.warmup_error},
                 "active": self.busy or bool(self._ready) or self._playing or self._finishing}
+
+    def prewarm(self):
+        self._prewarm_enabled = True
+        if self._closed or not self.profiles_path.is_file():
+            return
+        if self._warmup_target == self.language and self.warmup_state in {"warming", "ready"}:
+            return
+        self._warmup_target = self.language
+        self.warmup_state, self.warmup_error = "warming", None
+        with self._condition:
+            self._warmup_language = self.language
+            self._condition.notify()
+        self.changed.emit()
+
+    def _warmup_complete(self, language, error):
+        if self._closed or language != self._warmup_target:
+            return
+        self.warmup_state, self.warmup_error = ("failed" if error else "ready"), error
+        self.changed.emit()
 
     def configure(self, language=None, enabled=None, provider=None, auto_translate=None, fallback=None):
         if language is not None and language not in ("zh", "ja"):
@@ -238,6 +302,8 @@ class TTSManager(QObject):
         temp.write_text(json.dumps({"language": self.language, "enabled": self.enabled,
             "provider": self.engine, "auto_translate": self.auto_translate, "fallback": self.fallback}), encoding="utf8")
         temp.replace(self.state_path)
+        if self._prewarm_enabled:
+            self.prewarm()
         self.changed.emit()
         return self.snapshot()
 
@@ -260,20 +326,21 @@ class TTSManager(QObject):
         translate = self.auto_translate if translate is None else translate
         return self._submit(text.strip(), language, speed, volume, translate)
 
-    def begin_stream(self, language):
+    def begin_stream(self, language, *, source="chat"):
         if language not in ("zh", "ja"):
             raise ValueError("语言需要 zh 或 ja")
         self.stop()
         self._stream, self._stream_language = self.generation, language
+        self._stream_source = source
         self._stream_open = True
         return self._stream
 
-    def enqueue_sentence(self, token, text, language):
+    def enqueue_sentence(self, token, text, language, *, translate=False):
         if self._closed or not self.enabled or self._stream != token or self.generation != token or not self._stream_open:
             return False
         if language != self._stream_language or not isinstance(text, str) or not 1 <= len(text.strip()) <= 500:
             return False
-        self._submit(text.strip(), language, 1.0, self.volume, False)
+        self._submit(text.strip(), language, 1.0, self.volume, translate)
         return True
 
     def finish_stream(self, token):
@@ -293,6 +360,7 @@ class TTSManager(QObject):
         self.last_request = {"id": self.generation, "text": text, "language": language,
                              "provider": self.engine, "translate": translate, "segment": self._sequence,
                              "stream": self._stream is not None}
+        self.last_request["source"] = self._stream_source if self._stream is not None else "speak"
         with self._condition:
             self._jobs.append((self.generation, text, language, speed, volume, self.engine, translate, self.fallback, dict(self.last_request)))
             self._condition.notify()
@@ -303,11 +371,25 @@ class TTSManager(QObject):
         while True:
             with self._condition:
                 # 当前句播放时最多预合成两句，避免长回复一次占满缓存/显存。
-                self._condition.wait_for(lambda: self._jobs and self._prefetched < 2 or self._closed)
+                self._condition.wait_for(lambda: self._jobs and self._prefetched < 2
+                    or self._warmup_language is not None and not self._jobs or self._closed)
                 if self._closed:
                     return
-                job = self._jobs.popleft()
-                self._prefetched += 1
+                if not self._jobs and self._warmup_language is not None:
+                    warmup_language, self._warmup_language = self._warmup_language, None
+                    job = None
+                else:
+                    job = self._jobs.popleft()
+                    self._prefetched += 1
+            if job is None:
+                try:
+                    self.provider.warmup(warmup_language)
+                    error = None
+                except Exception as exc:
+                    error = str(exc)
+                    logger.warning("心的语音后台预热失败：{}", exc)
+                self.warmup_completed.emit(warmup_language, error)
+                continue
             generation, text, language, speed, volume, engine, translate, fallback, request = job
             try:
                 spoken = text
@@ -352,6 +434,8 @@ class TTSManager(QObject):
             self.stop()
             self.failed.emit(self.error)
         elif result:
+            if result[3] == "gptsovits" and result[5]["language"] == self._warmup_target:
+                self.warmup_state, self.warmup_error = "ready", None
             self._ready.append(result)
             self._play_next()
         self.changed.emit()
@@ -365,10 +449,13 @@ class TTSManager(QObject):
             self._prefetched -= 1
             self._condition.notify()
         self.last_request = dict(request, spoken_text=text)
+        self._playing_segment, self._playing_text = request["segment"], text
         self._playing = self._starting = True
+        self._announced = False
         try:
             self.player.play(path, volume)
-            self.speech_started.emit(text)
+            if not hasattr(self.player, "player"):
+                self._announce_speech()
         except Exception as exc:
             self.error = str(exc)
             self.stop()
@@ -379,12 +466,19 @@ class TTSManager(QObject):
             self.stage = "playing"
 
     def _playback_state(self, state):
+        if state == QMediaPlayer.PlaybackState.PlayingState:
+            self._announce_speech()
         if state == QMediaPlayer.PlaybackState.StoppedState and self._playing and not self._starting:
             self._playing = False
             self._finishing = True
             token = self.generation
             # 同一轮事件中的解码错误优先取消队列，不能误播下一句。
             QTimer.singleShot(0, lambda: self._after_playback(token))
+
+    def _announce_speech(self):
+        if self._playing and not self._announced:
+            self._announced = True
+            self.speech_started.emit(self._playing_text)
 
     def _after_playback(self, token):
         if token == self.generation and not self._closed:
@@ -418,7 +512,10 @@ class TTSManager(QObject):
         self._ready.clear()
         self._pending = self._sequence = 0
         self._stream = self._stream_language = None
+        self._stream_source = self._playing_segment = None
+        self._playing_text = ""
         self._stream_open = self._playing = self._finishing = False
+        self._announced = False
         self.busy = False
         self.stage = "idle"
         self.player.stop()

@@ -1,0 +1,12 @@
+{
+  "text": "御者，我在这里。",
+  "text_lang": "zh",
+  "prompt_lang": "zh",
+  "prompt_text": "嗯？但凭御者差遣。",
+  "ref_audio_path": "<HSIN_ROOT>/voice/hsin_zh/wav32k/Hsin_ZH_1554287671512965120.wav",
+  "text_split_method": "cut5",
+  "batch_size": 1,
+  "speed_factor": 1.0,
+  "seed": 1234,
+  "streaming_mode": false
+}

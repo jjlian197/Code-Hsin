@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from src.core.app_config import project_path
 from src.core.chat_backends import PROVIDERS, make_backend
 from src.core.speech_stream import SentenceStream
+from src.core.chat_preferences import PREFERENCE_KEYS
 
 
 class ChatManager(QObject):
@@ -29,9 +30,14 @@ class ChatManager(QObject):
             saved = json.loads(self.state_path.read_text(encoding="utf8"))
             if saved.get("provider") in PROVIDERS:
                 self.provider = saved["provider"]
+            candidate = {**self.config, **{key: saved[key] for key in PREFERENCE_KEYS if key in saved}}
+            from src.core.app_config import validate_chat_config
+            validate_chat_config(candidate)
+            self.config = candidate
         except (OSError, ValueError, AttributeError):
             pass
         self.busy, self.error = False, None
+        self.warning = None
         self.generation, self.partial, self.messages = 0, "", []
         self.last_request, self.future = None, None
         self.backends = {}
@@ -59,9 +65,11 @@ class ChatManager(QObject):
             self.loop.close()
 
     def snapshot(self):
-        return {"provider": self.provider, "providers": list(PROVIDERS), "busy": self.busy,
-                "last_request": self.last_request, "error": self.error, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == "心" else None,
+        return {"provider": self.provider, "enabled": self.config.get("enabled", True), "providers": list(PROVIDERS), "busy": self.busy,
+                "last_request": self.last_request, "error": self.error, "warning": self.warning, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == "心" else None,
+                "preferences": {key: self.config[key] for key in PREFERENCE_KEYS},
                 "speech": {"limit": self.speech.limit, "emitted_characters": self.speech.spoken_chars,
+                           "limited": self.speech.limited, "scope": (self.last_request or {}).get("speech_scope", self.config["speech_scope"]),
                            "final_revised": self.speech.revised}}
 
     def configure(self, provider):
@@ -73,14 +81,27 @@ class ChatManager(QObject):
         self.error = None
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.state_path.with_suffix(".tmp")
-        temp.write_text(json.dumps({"provider": provider}), encoding="utf8")
+        temp.write_text(json.dumps({"provider": provider, **{key: self.config[key] for key in PREFERENCE_KEYS}}), encoding="utf8")
         temp.replace(self.state_path)
         self.changed.emit()
         return self.snapshot()
 
+    def configure_preferences(self, **settings):
+        if any(key not in PREFERENCE_KEYS for key in settings):
+            raise ValueError("未知对话偏好")
+        from src.core.app_config import validate_chat_config
+        candidate = {**self.config, **settings}
+        validate_chat_config(candidate)
+        if candidate != self.config:
+            self.stop()
+            self.config = candidate
+        return self.configure(self.provider)
+
     def send(self, text, language):
         if self.closed:
             raise ValueError("对话服务正在退出")
+        if not self.config.get("enabled", True):
+            raise ValueError("当前使用基础陪伴，请在右键菜单的设置中开启 AI 对话")
         if not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000 or language not in ("zh", "ja"):
             raise ValueError("需要 1–4000 字符的文字与 zh/ja 语言")
         if self.busy:
@@ -88,16 +109,20 @@ class ChatManager(QObject):
         self.generation += 1
         generation, provider = self.generation, self.provider
         self.busy, self.error, self.partial = True, None, ""
-        self.speech = SentenceStream()
-        self.last_request = {"id": generation, "text": text.strip(), "language": language, "provider": provider}
+        self.warning = None
+        scope = self.config["speech_scope"]
+        self.speech = SentenceStream(limit=0 if scope == "off" else self.config["speech_prefix_chars"] if scope == "prefix" else None,
+            sentence_limit=self.config["speech_sentence_count"] if scope == "sentences" else None)
+        self.last_request = {"id": generation, "text": text.strip(), "language": language, "provider": provider,
+                             "reply_length": self.config["reply_length"], "speech_scope": scope}
         self.messages.append(("御者", text.strip()))
         self.messages = self.messages[-24:]
-        self.future = asyncio.run_coroutine_threadsafe(self._chat(generation, text.strip(), language, provider), self.loop)
+        self.future = asyncio.run_coroutine_threadsafe(self._chat(generation, text.strip(), language, provider, self.last_request["reply_length"]), self.loop)
         self.changed.emit()
         self.updated.emit()
         return dict(self.last_request)
 
-    async def _chat(self, generation, text, language, provider):
+    async def _chat(self, generation, text, language, provider, reply_length):
         try:
             config = self.config[provider]
             # 设置变更后在工作线程上更换客户端，避免跨线程改写会话。
@@ -109,9 +134,10 @@ class ChatManager(QObject):
             async def delta(chunk):
                 if not self.closed:
                     self.progress.emit(generation, chunk)
-            reply = await self.backends[provider][1].chat(text, language, delta)
+            backend = self.backends[provider][1]
+            reply = await backend.chat(text, language, delta, reply_length=reply_length)
             if not self.closed:
-                self.completed.emit(generation, (reply, language), None)
+                self.completed.emit(generation, (reply, language, getattr(backend, "warning", None)), None)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -122,7 +148,7 @@ class ChatManager(QObject):
 
     def _progress(self, generation, chunk):
         if not self.closed and self.busy and generation == self.generation:
-            self.partial = (self.partial + chunk)[-20000:]
+            self.partial += chunk
             for sentence in self.speech.feed(chunk):
                 self.sentence_ready.emit(generation, sentence, self.last_request["language"])
             self.updated.emit()
@@ -132,7 +158,7 @@ class ChatManager(QObject):
             return
         self.busy, self.error, self.partial = False, error, ""
         if result:
-            reply, language = result
+            reply, language, self.warning = result
             self.messages.append(("心", reply))
             for sentence in self.speech.finish(reply):
                 self.sentence_ready.emit(generation, sentence, language)
@@ -167,8 +193,4 @@ def spoken_reply(text):
     text = re.sub(r"```.*?```", "", text, flags=re.S)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"[*#`_<>]", "", text).strip()
-    if len(text) > 500:
-        prefix = text[:500]
-        endings = [prefix.rfind(char) for char in "。！？!?\n"]
-        text = prefix[:max(endings) + 1] if max(endings) >= 100 else prefix
     return text

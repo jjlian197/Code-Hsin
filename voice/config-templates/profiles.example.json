@@ -1,0 +1,25 @@
+{
+  "profile_id": "hsin-v2proplus-zh-ja",
+  "installation": {
+    "gptsovits_root": "<GPT_SOVITS_ROOT>",
+    "python": "<GPT_SOVITS_PYTHON>",
+    "bert_pretrained_dir": "<GPT_SOVITS_ROOT>/GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large",
+    "cnhubert_base_dir": "<GPT_SOVITS_ROOT>/GPT_SoVITS/pretrained_models/chinese-hubert-base"
+  },
+  "profiles": {
+    "zh": {
+      "gpt_weights": "<HSIN_ROOT>/voice/hsin_zh/weights/GPT/HsinZH-e20.ckpt",
+      "sovits_weights": "<HSIN_ROOT>/voice/hsin_zh/weights/SoVITS/HsinZH_e20_s520.pth",
+      "reference_audio": "<HSIN_ROOT>/voice/hsin_zh/wav32k/Hsin_ZH_1554287671512965120.wav",
+      "prompt_text": "嗯？但凭御者差遣。",
+      "language": "zh"
+    },
+    "ja": {
+      "gpt_weights": "<HSIN_ROOT>/voice/hsin_ja/weights/GPT/HsinJA-e20.ckpt",
+      "sovits_weights": "<HSIN_ROOT>/voice/hsin_ja/weights/SoVITS/HsinJA_e20_s880.pth",
+      "reference_audio": "<HSIN_ROOT>/voice/hsin_ja/wav32k/Hsin_JA_1311127.wav",
+      "prompt_text": "あら？いいわ――御者の思うがままに。",
+      "language": "ja"
+    }
+  }
+}

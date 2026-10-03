@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import aiohttp
+from src.core.chat_preferences import reply_instruction
 
 
 def local_url(value, schemes=("http", "https")):
@@ -81,7 +82,7 @@ class HermesBridge:
             async with await self.connect(session) as ws:
                 return await self.request(ws, "profiles.list", {}, [])
 
-    async def chat(self, text, language, on_delta):
+    async def chat(self, text, language, on_delta, *, reply_length="normal"):
         profile = self.config.get("profile") or "default"
         async with aiohttp.ClientSession() as session:
             async with await self.connect(session) as ws:
@@ -94,7 +95,7 @@ class HermesBridge:
                 sid = result["session_id"]
                 self.runtime_session = sid
                 self.stored_session = result.get("stored_session_id") or self.stored_session
-                instruction = "请用日语简短回答，适合语音朗读。" if language == "ja" else "请用中文简短回答，适合语音朗读。"
+                instruction = ("请用日语回答，适合语音朗读。" if language == "ja" else "请用中文回答，适合语音朗读。") + reply_instruction(reply_length, language)
                 complete = False
                 try:
                     await self.request(ws, "prompt.submit", {"profile": profile, "session_id": sid,

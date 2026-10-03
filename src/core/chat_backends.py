@@ -8,15 +8,16 @@ import aiohttp
 import websockets
 
 from src.core.hermes_bridge import HermesBridge, local_url
+from src.core.chat_preferences import reply_instruction
 
 PROVIDERS = {"hermes": "Hermes · Hsin", "openclaw": "OpenClaw", "deepseek": "DeepSeek 直连"}
 HSIN_PROMPT = """你是《鸣潮》的心（Hsin），在御者的桌面上陪伴他。称呼用户为御者，语气温柔从容，
-偶尔俏皮，对日常小事怀有好奇心。用一到三句简短的话回答，适合朗读。当前是文字直连，
+偶尔俏皮，对日常小事怀有好奇心。回答自然、适合朗读。当前是文字直连，
 没有本地 Agent 的工具权限。没有依据时不要声称看到了屏幕、读了文件、操作了软件或记得未知往事。
 不输出动作旁白、思考过程或 Markdown。"""
 
 
-async def read_sse(content, on_delta):
+async def read_sse(content, on_delta, *, on_limit=None):
     parts, lines, done = [], [], False
 
     async def consume():
@@ -32,6 +33,8 @@ async def read_sse(content, on_delta):
         if frame.get("error"):
             raise RuntimeError("对话服务返回错误")
         choices = frame.get("choices") or []
+        if choices and choices[0].get("finish_reason") == "length" and on_limit:
+            on_limit()
         delta = choices[0].get("delta", {}).get("content", "") if choices else ""
         if delta:
             if not isinstance(delta, str):
@@ -59,23 +62,26 @@ async def read_sse(content, on_delta):
 class DeepSeekBridge:
     def __init__(self, config):
         self.config, self.history = config, []
+        self.warning = None
 
-    async def chat(self, text, language, on_delta):
+    async def chat(self, text, language, on_delta, *, reply_length="normal"):
+        self.warning = None
         key = (os.environ.get("DEEPSEEK_API_KEY") or self.config.get("api_key") or "").strip()
         if not key:
             raise ValueError("请在连接设置中填写 DeepSeek API Key")
         locale = "请用日语回答。" if language == "ja" else "请用中文回答。"
         payload = {"model": self.config.get("model", "deepseek-v4-flash"),
-            "messages": [{"role": "system", "content": HSIN_PROMPT + locale}, *self.history,
+            "messages": [{"role": "system", "content": HSIN_PROMPT + locale + reply_instruction(reply_length, language)}, *self.history,
                          {"role": "user", "content": text}],
-            "stream": True, "thinking": {"type": "disabled"}, "max_tokens": 384}
+            "stream": True, "thinking": {"type": "disabled"}, "max_tokens": {"short": 512, "normal": 1536, "detailed": 4096}[reply_length]}
         timeout = aiohttp.ClientTimeout(total=120, connect=10, sock_read=40)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post("https://api.deepseek.com/chat/completions", headers={"Authorization": "Bearer " + key}, json=payload) as response:
                 if response.status != 200:
                     reasons = {401: "密钥无效", 402: "账户余额不足", 429: "请求过于频繁"}
                     raise RuntimeError(f"DeepSeek：{reasons.get(response.status, '服务暂不可用')}（{response.status}）")
-                reply = await read_sse(response.content, on_delta)
+                reply = await read_sse(response.content, on_delta,
+                    on_limit=lambda: setattr(self, "warning", "回复达到模型生成上限，可能尚未说完；可选择详细回复或请求继续。"))
         self.history = (self.history + [{"role": "user", "content": text}, {"role": "assistant", "content": reply}])[-12:]
         return reply
 
@@ -92,7 +98,7 @@ class OpenClawBridge:
         except (OSError, asyncio.TimeoutError) as error:
             raise RuntimeError("OpenClaw 本地网关未启动，请检查连接设置") from error
 
-    async def chat(self, text, language, on_delta):
+    async def chat(self, text, language, on_delta, *, reply_length="normal"):
         url = local_url(self.config.get("url", "ws://127.0.0.1:18789/ws"), ("ws", "wss"))
         token = os.environ.get("OPENCLAW_GATEWAY_TOKEN") or self.config.get("token")
         if not token:
@@ -118,7 +124,7 @@ class OpenClawBridge:
                 "auth": {"token": token}, "scopes": ["operator.read", "operator.write", "operator.talk.secrets"],
                 "minProtocol": 3, "maxProtocol": 4}, pending)
             await request("sessions.messages.subscribe", {"key": self.session_key}, pending)
-            locale = "请用日语简短回答，适合朗读。" if language == "ja" else "请用中文简短回答，适合朗读。"
+            locale = ("请用日语回答，适合朗读。" if language == "ja" else "请用中文回答，适合朗读。") + reply_instruction(reply_length, language)
             complete = False
             try:
                 await request("chat.send", {"sessionKey": self.session_key, "message": text + "\n\n【桌面对话语言】" + locale,

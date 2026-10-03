@@ -1,0 +1,12 @@
+{
+  "text": "御者、ここにいます。",
+  "text_lang": "ja",
+  "prompt_lang": "ja",
+  "prompt_text": "あら？いいわ――御者の思うがままに。",
+  "ref_audio_path": "<HSIN_ROOT>/voice/hsin_ja/wav32k/Hsin_JA_1311127.wav",
+  "text_split_method": "cut5",
+  "batch_size": 1,
+  "speed_factor": 1.0,
+  "seed": 1234,
+  "streaming_mode": false
+}

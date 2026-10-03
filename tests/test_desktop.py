@@ -129,14 +129,14 @@ class DesktopTest(QtWindowTestCase):
         from unittest.mock import patch
         self.window.tts.enabled = False  # 只验情绪事件，不让模拟对话请求备用联网音色。
         class FailedBackend:
-            async def chat(self, *_):
+            async def chat(self, *_, **kwargs):
                 raise RuntimeError("模拟失败")
         with patch("src.core.chat_manager.make_backend", return_value=FailedBackend()):
             self.window.send_chat("一次失败的对话")
             self.wait(.05)
         self.assertEqual(self.window.mood.snapshot()["affection"], 30)
         class SuccessfulBackend:
-            async def chat(self, *_):
+            async def chat(self, *_, **kwargs):
                 return "收到成功回复"
         self.window.chat.backends.clear()
         with patch("src.core.chat_manager.make_backend", return_value=SuccessfulBackend()):
@@ -232,7 +232,7 @@ class DesktopTest(QtWindowTestCase):
         from src.ui.chat_dialog import ChatDialog
         release = threading.Event()
         class Backend:
-            async def chat(self, text, language, delta):
+            async def chat(self, text, language, delta, **kwargs):
                 await delta("第一句。")
                 while not release.is_set():
                     await asyncio.sleep(.005)
@@ -248,6 +248,8 @@ class DesktopTest(QtWindowTestCase):
                 if played:
                     break
             self.assertEqual(played, ["第一句。"])
+            self.window.voice_player.player.playbackStateChanged.emit(QMediaPlayer.PlaybackState.PlayingState)
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第一句。")
             self.assertTrue(self.window.chat.busy, "第一句必须在后端完整回复前播放")
             token = self.window.tts.generation
             with self.assertRaises(ValueError):
@@ -261,9 +263,13 @@ class DesktopTest(QtWindowTestCase):
             self.assertFalse(self.window.chat.busy)
             self.assertEqual([r[1] for r in self.window.chat.messages if r[0] == "心"], ["第一句。第二句。末句"])
             self.assertEqual(len(self.window.tts._ready), 2)
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第一句。", "全文结束不能覆盖正在播放的句子")
             self.window.voice_player.player.playbackStateChanged.emit(QMediaPlayer.PlaybackState.StoppedState)
             self.wait(.01)
             self.assertEqual(played, ["第一句。", "第二句。"])
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第一句。", "音频尚未真正播放时不要提前换句")
+            self.window.voice_player.player.playbackStateChanged.emit(QMediaPlayer.PlaybackState.PlayingState)
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第二句。")
             dialog = ChatDialog(self.window)
             self.assertTrue(dialog.stop_button.isEnabled(), "全文收到后仍可停止剩余语音")
             dialog.stop_button.click()
@@ -272,6 +278,29 @@ class DesktopTest(QtWindowTestCase):
             self.assertFalse(self.window.tts.snapshot()["active"])
             self.assertFalse(dialog.stop_button.isEnabled())
             dialog.deleteLater()
+
+    def test_text_only_reply_bubble_shows_sentences_and_stop_cancels_timer(self):
+        from unittest.mock import patch
+        class Backend:
+            async def chat(self, text, language, delta, **kwargs):
+                await delta("第一句。第二句。")
+                return "第一句。第二句。末句"
+        self.window.tts.configure(enabled=False)
+        with patch("src.core.chat_manager.make_backend", return_value=Backend()):
+            self.window.send_chat("测试文字气泡")
+            for _ in range(100):
+                self.wait(.01)
+                if not self.window.chat.busy:
+                    break
+            self.assertFalse(self.window.chat.busy)
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第一句。")
+            self.assertTrue(self.window.reply_bubble.timer.isActive())
+            self.window.reply_bubble.timer.start(1)
+            self.wait(.03)
+            self.assertEqual(self.window.bubble_widget.message_label.text(), "第二句。")
+            self.window.stop_chat()
+            self.assertFalse(self.window.reply_bubble.timer.isActive())
+            self.assertFalse(self.window.bubble_widget.isVisible())
 
     def test_transparency_and_independent_model_paths(self):
         self.assertTrue(self.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
@@ -360,6 +389,90 @@ class DesktopTest(QtWindowTestCase):
             self.window.set_click_through(True)
             view.set_activity.assert_called_with("idle", False)
         view.renderer_name = "placeholder"
+
+
+class IdleRestTest(QtWindowTestCase):
+    def setUp(self):
+        super().setUp()
+        from unittest.mock import Mock
+        self.view = self.window.sprite_view
+        self.view.renderer_name = "pmx"
+        self.view.model_loaded = True
+        self.view.model_info = {"runtime": {"motion": "idle"}}
+        self.view.get_available_motions = Mock(return_value=["idle", "side_lying"])
+        self.view.trigger_motion = Mock()
+        self.view.set_activity = Mock()
+
+    def tearDown(self):
+        self.view.renderer_name = "placeholder"
+        self.view.model_loaded = False
+        super().tearDown()
+
+    def elapse(self, seconds):
+        self.window._last_interaction = time.monotonic() - seconds
+
+    def test_ten_minutes_then_one_request_and_immediate_wake(self):
+        self.elapse(599)
+        self.window._tick_rest()
+        self.view.trigger_motion.assert_not_called()
+        self.elapse(600)
+        self.window._tick_rest()
+        self.window._tick_rest()
+        self.view.trigger_motion.assert_called_once_with("side_lying")
+        self.view.model_info["runtime"]["motion"] = "side_lying"
+        self.window._record_interaction()
+        self.view.trigger_motion.assert_called_with("idle")
+        self.window._record_interaction()
+        self.assertEqual(self.view.trigger_motion.call_count, 2)
+        self.view.model_info["runtime"]["motion"] = "idle"
+        self.window._rest_pose_changed("idle")
+        self.window._tick_rest()
+        self.assertEqual(self.view.trigger_motion.call_count, 2)
+        self.assertFalse(self.window._rest_requested)
+
+    def test_busy_loading_hidden_and_manual_motion_do_not_rest(self):
+        from unittest.mock import patch
+        for blocker in ("chat", "tts", "speech", "recognizing", "drag", "hidden", "loading", "motion", "missing"):
+            self.elapse(601)
+            stt = {**self.window.stt.snapshot(), "speech_active": blocker == "speech", "recognizing": blocker == "recognizing"}
+            self.window.chat.busy = blocker == "chat"
+            self.window.drag_position = QPoint(1, 1) if blocker == "drag" else None
+            self.view.model_loaded = blocker != "loading"
+            self.view.model_info["runtime"]["motion"] = "wave" if blocker == "motion" else "idle"
+            self.view.get_available_motions.return_value = [] if blocker == "missing" else ["idle", "side_lying"]
+            self.window.setVisible(blocker != "hidden")
+            with patch.object(self.window.tts, "snapshot", return_value={"active": blocker == "tts"}), patch.object(self.window.stt, "snapshot", return_value=stt):
+                self.window._tick_rest()
+            self.view.trigger_motion.assert_not_called()
+        self.window.chat.busy = False
+
+    def test_typing_wakes_manual_rest_but_mouse_follow_does_not(self):
+        from PyQt6.QtGui import QKeyEvent
+        from PyQt6.QtWidgets import QLineEdit
+        editor = QLineEdit(self.window)
+        self.elapse(601)
+        before = self.window._last_interaction
+        self.app.sendEvent(editor, QEvent(QEvent.Type.Enter))
+        self.assertEqual(before, self.window._last_interaction)
+        self.view.model_info["runtime"]["motion"] = "side_lying"
+        self.app.sendEvent(editor, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, "a"))
+        self.view.trigger_motion.assert_called_once_with("idle")
+        self.assertLess(time.monotonic() - self.window._last_interaction, 1)
+        editor.deleteLater()
+
+    def test_chat_and_detected_speech_wake_even_during_lie_down(self):
+        from unittest.mock import patch
+        self.view.model_info["runtime"]["motion"] = "lie_down"
+        with patch.object(self.window.chat, "send", return_value={"id": 1}) as send:
+            self.window.send_chat("御者来了")
+            send.assert_called_once()
+        self.view.trigger_motion.assert_called_once_with("idle")
+        self.window._rest_pose_changed("idle")
+        self.view.trigger_motion.reset_mock()
+        self.view.model_info["runtime"]["motion"] = "side_lying"
+        with patch.object(self.window.stt, "snapshot", return_value={**self.window.stt.snapshot(), "speech_active": True}):
+            self.window._sync_rest_activity()
+        self.view.trigger_motion.assert_called_once_with("idle")
 
 
 class APITest(QtWindowTestCase):

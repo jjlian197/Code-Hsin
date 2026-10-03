@@ -1,11 +1,13 @@
 """独立配置：所有默认路径均以 Code Hsin 为基准。"""
 from copy import deepcopy
 from pathlib import Path
+import sys
 
 import yaml
 from src.core.stt_hotwords import DEFAULT_HOTWORDS
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 DEFAULT_CONFIG = {
     "sprite": {"name": "Hsin", "window": {"width": 400, "height": 600, "opacity": 1.0,
                "always_on_top": True, "click_through": False}, "renderer": "pmx",
@@ -20,7 +22,8 @@ DEFAULT_CONFIG = {
     "voice": {"manifest": "voice/hsin_zh/selection.json", "profiles": "voice/profiles.json",
               "enabled": False, "language": "zh", "volume": 0.65, "port": 19880,
               "provider": "gptsovits", "auto_translate": True, "fallback": True},
-    "chat": {"provider": "hermes", "hermes": {"home": str(Path.home() / "AppData/Local/hermes"), "url": "", "profile": "default", "token": ""},
+    "chat": {"provider": "hermes", "reply_length": "normal", "speech_scope": "full", "speech_sentence_count": 3, "speech_prefix_chars": 500,
+             "hermes": {"home": str(Path.home() / "AppData/Local/hermes"), "url": "", "profile": "default", "token": ""},
              "openclaw": {"url": "ws://127.0.0.1:18789/ws", "agent": "hsin", "token": ""},
              "deepseek": {"model": "deepseek-v4-flash", "api_key": ""}},
 }
@@ -28,7 +31,11 @@ DEFAULT_CONFIG = {
 
 def project_path(value):
     path = Path(value).expanduser()
-    return (PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+    if path.is_absolute():
+        return path.resolve()
+    local = (PROJECT_ROOT / path).resolve()
+    resource = (RESOURCE_ROOT / path).resolve()
+    return resource if not local.exists() and resource.exists() else local
 
 
 def merge_config(base, overrides):
@@ -54,6 +61,12 @@ def load_config(path=None):
     local = path.with_name("config.local.yaml")
     if local.exists():
         config = merge_config(config, read_yaml(local))
+    validate_config(config)
+    config["_config_path"] = str(path)
+    return config
+
+
+def validate_config(config):
     window = config["sprite"]["window"]
     for key in ("width", "height"):
         value = window[key]
@@ -120,9 +133,18 @@ def load_config(path=None):
 
 
 def validate_chat_config(chat):
+    from src.core.chat_preferences import REPLY_LENGTHS, SPEECH_SCOPES
     from src.core.hermes_bridge import local_url
     if not isinstance(chat, dict) or chat.get("provider") not in ("hermes", "openclaw", "deepseek"):
         raise ValueError("chat.provider 需要 hermes、openclaw 或 deepseek")
+    if type(chat.get("enabled", True)) is not bool:
+        raise ValueError("chat.enabled 需要布尔值")
+    if (not isinstance(chat.get("reply_length", "normal"), str) or chat.get("reply_length", "normal") not in REPLY_LENGTHS
+            or not isinstance(chat.get("speech_scope", "full"), str) or chat.get("speech_scope", "full") not in SPEECH_SCOPES):
+        raise ValueError("回复长度或朗读范围无效")
+    for key, default, low, high in (("speech_sentence_count", 3, 1, 30), ("speech_prefix_chars", 500, 50, 10000)):
+        if type(chat.get(key, default)) is not int or not low <= chat.get(key, default) <= high:
+            raise ValueError("朗读范围数量无效")
     for backend, keys in (("hermes", ("home", "url", "profile", "token")),
                           ("openclaw", ("url", "agent", "token")), ("deepseek", ("model", "api_key"))):
         if not isinstance(chat.get(backend), dict) or any(not isinstance(chat[backend].get(key), str) for key in keys):

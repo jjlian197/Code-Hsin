@@ -42,3 +42,8 @@ voice/**/validation.json
 !.env.example
 *.pem
 *.key
+build/
+dist/
+release/
+voice/presets/
+voice/recordings/

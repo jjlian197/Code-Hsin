@@ -75,6 +75,9 @@ def main(argv=None):
         return 1
     (runtime / "endpoints.json").write_text(json.dumps(services.endpoints(), indent=2), encoding="utf-8")
     window.show_sprite()
+    if not args.headless and args.run_for is None:
+        QTimer.singleShot(400, window.show_first_run_setup)
+        QTimer.singleShot(0, window.tts.prewarm)
     logger.info("心桌面精灵已启动；渲染器：{}", window.sprite_view.renderer_name)
     if args.snapshot:
         target = project_path(args.snapshot)

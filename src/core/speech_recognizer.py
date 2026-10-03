@@ -90,6 +90,8 @@ class SpeechRecognizer:
 
     def _local(self, audio, config):
         if not self.local_available():
+            if getattr(sys, "frozen", False):
+                raise RuntimeError("本版 EXE 暂未包含本地 Whisper；请选择智谱识别，或使用源码版")
             raise RuntimeError("本地识别组件未安装，请安装 requirements-stt.txt")
         path = config.get("model_path", "").strip() or "base"
         language = config.get("language", "zh")
@@ -105,8 +107,10 @@ class SpeechRecognizer:
                     self._responses = queue.Queue()
                     env = dict(os.environ, PYTHONIOENCODING="utf-8", HF_HUB_OFFLINE="1")
                     # Qt/OpenMP 与 Whisper 隔离；仅在收到语音后加载 CPU 模型。
-                    self._process = subprocess.Popen([sys.executable, "-u", "-m", "src.core.stt_worker"],
-                        cwd=str(Path(__file__).resolve().parents[2]), env=env,
+                    command = [sys.executable, "-u", "-m", "src.core.stt_worker"]
+                    from src.core.app_config import PROJECT_ROOT
+                    self._process = subprocess.Popen(command,
+                        cwd=str(PROJECT_ROOT), env=env,
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
                     process, responses = self._process, self._responses

@@ -1,0 +1,29 @@
+# 便携版默认配置：右键/托盘设置或首次启动引导可修改。
+sprite:
+  renderer: pmx
+  model:
+    path: ""
+    forms: {}
+  animation:
+    physics: true
+    transitions: {}
+websocket:
+  enabled: true
+  host: 127.0.0.1
+  port: 18765
+http:
+  enabled: true
+  host: 127.0.0.1
+  port: 18766
+chat:
+  enabled: false
+  provider: hermes
+voice:
+  enabled: true
+  language: zh
+  provider: gptsovits
+  auto_translate: false
+  fallback: false
+stt:
+  model_path: ""
+  fallback: false

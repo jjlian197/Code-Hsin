@@ -60,8 +60,10 @@ def readable_prefix(text):
 
 
 class SentenceStream:
-    def __init__(self, limit=500, segment_size=160):
+    def __init__(self, limit=None, segment_size=80, sentence_limit=None):
         self.limit, self.segment_size = limit, segment_size
+        self.sentence_limit, self.sentence_count = sentence_limit, 0
+        self.limited = False
         self.raw, self.committed = "", ""
         self.consumed, self.spoken_chars = 0, 0
         self.revised = False
@@ -82,12 +84,18 @@ class SentenceStream:
 
     def _drain(self, clean, final):
         result = []
-        while self.consumed < len(clean) and self.spoken_chars < self.limit:
+        while self.consumed < len(clean):
+            if (self.limit is not None and self.spoken_chars >= self.limit or
+                    self.sentence_limit is not None and self.sentence_count >= self.sentence_limit or self.limited):
+                self.limited = True
+                break
             start, end = self.consumed, None
+            boundary = False
             for index in range(start, min(len(clean), start + self.segment_size)):
                 char = clean[index]
                 period = char == "." and (index + 1 < len(clean) and clean[index + 1].isspace() or final and index + 1 == len(clean))
                 if char in "。！？!?\n" or period:
+                    boundary = True
                     end = index + 1
                     while end < len(clean) and clean[end] in '。！？!?」』”’\"':
                         end += 1
@@ -101,15 +109,17 @@ class SentenceStream:
                         end = soft + 1
                 elif final:
                     end = len(clean)
+                    boundary = True
                 else:
                     break
             text = clean[start:end].strip()
-            remaining = self.limit - self.spoken_chars
-            if len(text) > remaining:
-                text = text[:remaining].rstrip()
+            if self.limit is not None and len(text) > self.limit - self.spoken_chars:
+                self.limited = True
+                break  # 不截半句；聊天全文仍然保留。
             if any(char.isalnum() for char in text):
                 result.append(text)
                 self.spoken_chars += len(text)
+                self.sentence_count += int(boundary)
                 self.committed = clean[:end]
             self.consumed = end
         return result

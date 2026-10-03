@@ -163,7 +163,8 @@ class VoiceTest(unittest.TestCase):
                 requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 self.send_response(200)
                 self.end_headers()
-                self.wfile.write(sample_wave())
+                self.wfile.write(json.dumps({"ready": True, "language": requests[-1]["language"]}).encode()
+                    if self.path == "/warmup" else sample_wave())
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -178,6 +179,8 @@ class VoiceTest(unittest.TestCase):
             self.assertEqual(len(requests), 2)
             self.assertEqual(requests[1]["language"], "ja")
             self.assertAlmostEqual(wave_info(ja.read_bytes()), 0.2)
+            provider.warmup("ja")
+            self.assertEqual(requests[-1], {"language": "ja"}, "缓存存在仍须实际预热")
             data = {"profile_id": "wrong"}
             with self.assertRaises(RuntimeError):
                 provider.ensure_server(data)
@@ -185,3 +188,48 @@ class VoiceTest(unittest.TestCase):
             provider.close()
             server.shutdown()
             server.server_close()
+
+    def test_prewarm_is_background_silent_nonblocking_and_tracks_language(self):
+        manager, player = self.manager()
+        begun, release = threading.Event(), threading.Event()
+        calls = []
+        def warmup(language):
+            calls.append(language)
+            begun.set()
+            release.wait(2)
+        manager.provider.warmup = warmup
+        try:
+            manager.configure(enabled=False)
+            manager.prewarm()
+            self.assertTrue(begun.wait(1))
+            self.assertEqual(manager.snapshot()["warmup"]["state"], "warming")
+            self.assertFalse(manager.snapshot()["active"], "后台预热不应占用对话/收音状态")
+            self.assertEqual(player.played, [])
+            manager.configure(language="ja")
+            release.set()
+            self.pump(lambda: manager.snapshot()["warmup"]["state"] == "ready")
+            self.assertEqual(calls, ["zh", "ja"])
+            self.assertEqual(manager.snapshot()["warmup"]["language"], "ja")
+            manager.prewarm()
+            self.assertIsNone(manager._warmup_language, "已完成预热无需重复")
+            self.assertEqual(player.played, [])
+        finally:
+            release.set()
+            manager.close()
+
+    def test_prewarm_failure_does_not_disable_normal_speech(self):
+        manager, player = self.manager()
+        def fail(language):
+            raise RuntimeError("预热失败")
+        manager.provider.warmup = fail
+        manager.provider.synthesize = lambda *_: self.root / "speech.wav"
+        try:
+            manager.prewarm()
+            self.pump(lambda: manager.snapshot()["warmup"]["state"] == "failed")
+            self.assertFalse(manager.busy)
+            self.assertIsNone(manager.error)
+            manager.speak("你好", translate=False)
+            self.pump(lambda: bool(player.played))
+            self.assertEqual(manager.snapshot()["warmup"]["state"], "ready")
+        finally:
+            manager.close()

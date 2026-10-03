@@ -68,6 +68,18 @@ try {
         $base = 'http://' + $address + ':' + $probe.http_port
     }
     $existing = if ($base) { Read-Status $base } else { $null }
+    $configuredBase = $base
+    # 设置可能已保存新端口；仍通过当前运行实例登记的旧地址完成退出。
+    if (-not $existing) {
+        try {
+            $registered = Get-Content -LiteralPath (Join-Path $probe.runtime 'endpoints.json') -Raw | ConvertFrom-Json
+            $registeredUri = [Uri]$registered.http
+            if ($registeredUri.Scheme -eq 'http' -and $registeredUri.Host -in @('127.0.0.1', '::1', '[::1]') -and -not $registeredUri.UserInfo) {
+                $running = Read-Status $registered.http
+                if ($running) { $base = $registered.http; $existing = $running }
+            }
+        } catch { }
+    }
     if ($Stop -or $Restart) {
         if ($existing) {
             $reply = Invoke-RestMethod -Uri ($base + '/api/command') -Method Post -ContentType 'application/json' -Body '{"type":"window","data":{"action":"quit"}}' -TimeoutSec 5
@@ -87,6 +99,7 @@ try {
         Write-Output '心已经在运行，已显示窗口。'
         exit 0
     }
+    $base = $configuredBase
     $appArguments = @('-m', 'src.main')
     if ($RunFor -gt 0) { $appArguments += @('--run-for', $RunFor.ToString([Globalization.CultureInfo]::InvariantCulture)) }
     if ($Snapshot) { $appArguments += @('--snapshot', $Snapshot) }

@@ -60,7 +60,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 上述模型控制要求 PMX 已加载，加载中返回 `renderer_unavailable`。`speak` 在所选引擎与备用引擎均未就绪时返回 `tts_unavailable`，关闭语音时返回 `tts_disabled`。正常接收后返回 `tts_queued`，合成完成自动播放；实际进展与错误查询 `tts` / `audio` 状态或订阅 `tts_status`。`tts.provider` 是首选引擎，`actual_provider` 是实际音色；`warning` 标明备用音色，`stage` 包含 queued/translating/synthesizing/fallback/playing/waiting/idle。语言或引擎切换和停止会取消旧请求及未播放队列。本地原声播放使用 `audio`，无需训练权重。详见 [中日语音](VOICE.md)。
 
-聊天自动分句朗读，无需新增命令。`tts.streaming/stream_open` 表示聊天队列及是否继续接收句子；`queued_segments/ready_segments` 分别是未合成和已合成待播放数量，`active` 包括当前播放，用于收音阻塞和停止按钮。`chat.speech` 提供累计排出字符数、当前 500 字上限与 `final_revised`（最终回复改写了已读前缀，剩余语音已取消）。最终聊天文字保留全文。显式 `speak` 继续替换当前语音，而不是向聊天队列追加。
+聊天默认全文分句朗读，无需新增命令。`tts.streaming/stream_open` 表示聊天队列及是否继续接收句子；`queued_segments/ready_segments` 分别是未合成和已合成待播放数量，`active` 包括当前播放，用于收音阻塞和停止按钮。`playing_segment/playing_text` 表示实际正在播放的片段，排队不代表已经播放。`chat.speech` 提供 `scope`、累计排出字符数、可选字数上限 `limit`（全文为 null）、`limited` 与 `final_revised`（最终回复改写了已读前缀，剩余语音已取消）。最终聊天文字保留全文。显式 `speak` 继续替换当前语音，而不是向聊天队列追加。
 
 支持参数与范围可从 `available_parameters` 查询：角度 ParamAngleX (-30–30)、ParamAngleY (-20–20)、ParamAngleZ (-15–15)；上半身 ParamBodyAngleX/Y (-10–10)；眼球 ParamEyeBallX/Y (-1–1)；眼睛开放度 ParamEyeLOpen/ROpen (0–1)；张嘴 ParamMouthOpenY (0–1)；嘴角 ParamMouthForm (-1–1)。参数持续有效，直到设置新值、清除手动参数或切换模型。
 
@@ -80,13 +80,18 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 ## 对话后端
 
+正常桌面启动会静音预热本地音色；`tts.warmup` 提供 `state: idle/warming/ready/failed`、`language` 和 `error`。后台预热独立于 `tts.active`，不代表朗读或收音占用。`speech_started` 由实际播放器进入播放状态触发，聊天气泡随该句切换，未朗读部分定时推进；聊天完整回复仍保留在 `chat.reply`。
+
 ```json
 {"type":"chat_config","data":{"provider":"hermes"}}
+{"type":"chat_config","data":{"reply_length":"detailed","speech_scope":"sentences","speech_sentence_count":3}}
 {"type":"chat","data":{"text":"今天想和你聊聊天。"}}
 {"type":"chat_config","data":{"action":"stop"}}
 ```
 
 `provider` 可选 `hermes`、`openclaw`、`deepseek`。`chat` 返回 `chat_queued`、编号和语言，完成结果在 `get_status.data.chat.reply`；错误在 `chat.error`。`chat_status` 广播开始、停止、后端变化和完成状态。显式 `chat.language` 可选 zh/ja，默认跟随语音菜单。切换语音语言会取消当前回复。凭据不通过控制接口设置或返回。
+
+`chat_config` 可持久保存 `reply_length: short/normal/detailed`、`speech_scope: full/sentences/prefix/off`、`speech_sentence_count: 1–30`、`speech_prefix_chars: 50–10000`。默认适中回复、全文朗读；改变选项会停止当前对话和朗读，下次请求生效。DeepSeek 达到生成上限时，已生成文本仍保留，`chat.warning` 提醒继续回复。
 
 ## HTTP
 

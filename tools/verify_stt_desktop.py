@@ -42,7 +42,7 @@ def main():
     if not live:
         config["stt"].update(provider="whisper", fallback=False)
     class OfflineBackend:
-        async def chat(self, text, language, on_delta):
+        async def chat(self, text, language, on_delta, **kwargs):
             await asyncio.sleep(.2)
             reply = "御者，我在这里。" if language == "zh" else "御者、ここにいるわ。"
             await on_delta(reply)

@@ -108,7 +108,7 @@ def main():
                 self.send(404, {"error": "unknown endpoint"})
 
         def do_POST(self):
-            if self.path != "/tts":
+            if self.path not in {"/tts", "/warmup"}:
                 return self.send(404, {"error": "unknown endpoint"})
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -117,6 +117,11 @@ def main():
                 payload = json.loads(self.rfile.read(length))
                 if not isinstance(payload, dict):
                     raise ValueError("请求需要 JSON 对象")
+                if self.path == "/warmup":
+                    language = payload.get("language")
+                    text = {"zh": "御者，我在这里。", "ja": "御者、ここにいます。"}.get(language)
+                    synthesize({"language": language, "text": text})
+                    return self.send(200, {"language": language, "ready": True})
                 audio = synthesize(payload)
                 self.send(200, audio, "audio/wav")
             except ValueError as exc:

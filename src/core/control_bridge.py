@@ -199,10 +199,18 @@ class ControlBridge(QObject):
             window._sync_microphone()
             return self.success("stt_config", window.stt.configure(**settings))
         if kind == "chat_config":
+            from src.core.chat_preferences import PREFERENCE_KEYS
+            if any(key not in {"action", "provider", *PREFERENCE_KEYS} for key in data):
+                raise CommandError("未知 chat_config 设置")
             action = data.get("action", "set")
             if action == "stop":
                 window.stop_chat()
             elif action == "set":
+                preferences = {key: data[key] for key in PREFERENCE_KEYS if key in data}
+                from src.core.app_config import validate_chat_config
+                validate_chat_config({**window.chat.config, **preferences, "provider": data.get("provider", window.chat.provider)})
+                if preferences:
+                    window.set_chat_preferences(**preferences)
                 window.set_chat_provider(data.get("provider", window.chat.provider))
             elif action != "status":
                 raise CommandError("chat_config.action 需要 set、status 或 stop")
@@ -278,7 +286,7 @@ class ControlBridge(QObject):
                 group = data.get("group")
                 if not isinstance(group, str):
                     raise CommandError("动作 group 需要字符串")
-                loading = view.trigger_motion(group, integer(data.get("index", 0), "index", 0, 1000))
+                loading = window._play_motion(group, integer(data.get("index", 0), "index", 0, 1000))
                 if loading:
                     return self.success("motion_loading", data)
             elif kind in {"parameter", "parameter_batch"}:

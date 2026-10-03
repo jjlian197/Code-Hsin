@@ -1,0 +1,8 @@
+custom:
+  version: v2ProPlus
+  device: cuda
+  is_half: true
+  t2s_weights_path: <HSIN_ROOT>/voice/hsin_zh/weights/GPT/HsinZH-e20.ckpt
+  vits_weights_path: <HSIN_ROOT>/voice/hsin_zh/weights/SoVITS/HsinZH_e20_s520.pth
+  bert_base_path: <GPT_SOVITS_ROOT>/GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
+  cnhuhbert_base_path: <GPT_SOVITS_ROOT>/GPT_SoVITS/pretrained_models/chinese-hubert-base

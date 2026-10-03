@@ -13,9 +13,8 @@ def main():
             raise ValueError("缺少 requests，请安装 requirements.txt")
         from src.core.app_config import load_config, project_path
         config = load_config()
-        if config["sprite"]["renderer"] == "pmx" and not project_path(config["sprite"]["model"]["path"]).is_file():
-            raise ValueError("找不到 PMX 模型，请在 config.local.yaml 配置 sprite.model.path")
         data = {"success": True, "python": sys.executable,
+                "model_file_exists": project_path(config["sprite"]["model"]["path"]).is_file(),
                 "http_enabled": config["http"]["enabled"], "http_host": config["http"]["host"],
                 "http_port": config["http"]["port"], "runtime": str(project_path(config["runtime"]["directory"]))}
     except Exception as error:

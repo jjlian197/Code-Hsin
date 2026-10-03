@@ -60,8 +60,19 @@ class SplitterTest(unittest.TestCase):
         self.assertEqual(result, ["第一句。", "第二句。", "第三句。"])
         stream = SentenceStream()
         result = stream.feed("心" * 900) + stream.finish("心" * 900)
-        self.assertEqual(sum(map(len, result)), 500)
+        self.assertEqual(sum(map(len, result)), 900)
         self.assertTrue(all(len(piece) <= 160 for piece in result))
+
+    def test_selected_limits_do_not_cut_segments_or_count_long_chunks_as_sentences(self):
+        text = "心" * 190 + "。第二句。第三句。第四句。"
+        stream = SentenceStream(sentence_limit=3)
+        result = stream.feed(text) + stream.finish(text)
+        self.assertEqual("".join(result), "心" * 190 + "。第二句。第三句。")
+        self.assertTrue(stream.limited)
+        stream = SentenceStream(limit=50)
+        self.assertEqual(stream.feed("第一句。" + "长" * 60 + "。"), ["第一句。"])
+        self.assertTrue(stream.limited)
+        self.assertEqual(SentenceStream(limit=0).finish("不读这句。"), [])
 
 
 class Media(QObject):

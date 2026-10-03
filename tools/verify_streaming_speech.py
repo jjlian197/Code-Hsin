@@ -39,7 +39,7 @@ def main():
     report = {"success": False, "languages": [], "failures": []}
 
     class Backend:
-        async def chat(self, text, language, delta):
+        async def chat(self, text, language, delta, **kwargs):
             first, second, tail = PHRASES[language]
             await delta(first)
             while not release.is_set():

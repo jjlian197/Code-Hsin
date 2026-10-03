@@ -3,9 +3,9 @@ import json
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QPixmap
-from PyQt6.QtWidgets import QApplication, QFrame, QInputDialog, QMainWindow, QMenu, QStackedLayout, QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QFrame, QInputDialog, QMainWindow, QMenu, QStackedLayout, QSystemTrayIcon, QWidget
 
 from src.core.app_config import project_path
 from src.core.sprite_view import SpriteView
@@ -29,6 +29,7 @@ EXPRESSION_LABELS = {"normal": "平常", "happy": "开心", "sad": "难过", "an
                      "content": "笑眯眯", "star_eyes": "星星眼", "heart_eyes": "爱心眼"}
 VIEW_MODES = {"full": "全身模式", "head_front": "大头模式 · 正面",
               "head_left": "大头模式 · 左斜侧", "head_right": "大头模式 · 右斜侧"}
+IDLE_REST_SECONDS = 10 * 60
 
 
 class HsinSpriteWindow(QMainWindow):
@@ -43,6 +44,8 @@ class HsinSpriteWindow(QMainWindow):
         self._press_point = None
         self._dragged = False
         self._standing_size = None
+        self._last_interaction = time.monotonic()
+        self._rest_requested = self._wake_requested = False
         self._full_size = (config["sprite"]["window"]["width"], config["sprite"]["window"]["height"])
         self.view_mode = "full"
         self._current_background = "transparent"
@@ -78,9 +81,15 @@ class HsinSpriteWindow(QMainWindow):
         self.tts.changed.connect(self._sync_microphone)
         self.voice_player.player.playbackStateChanged.connect(self._sync_microphone)
         self.chat_dialog = None
+        self.settings_dialog = None
         self._speech_chat_generation = self.chat.generation
         self._speech_token = None
+        from src.ui.reply_bubble import ReplyBubble
+        self.reply_bubble = ReplyBubble(self.bubble_widget, self)
+        self._bubble_audio_token = None
         self.chat.changed.connect(self._sync_chat_speech)
+        self.chat.updated.connect(self._update_reply_bubble)
+        self.tts.changed.connect(self._sync_bubble_audio)
         self.chat.sentence_ready.connect(self._chat_sentence)
         self.chat.speech_finished.connect(self._chat_speech_finished)
         self.chat.reply_ready.connect(self._chat_reply)
@@ -97,6 +106,7 @@ class HsinSpriteWindow(QMainWindow):
             self.voice_player.player.playbackStateChanged.connect(self._sync_companion)
             self.sprite_view.load_finished.connect(self._model_actions_ready)
             self.sprite_view.pose_changed.connect(self._fit_pose_window)
+            self.sprite_view.pose_changed.connect(self._rest_pose_changed)
         self._setup_tray()
         self.tts.changed.connect(self._refresh_voice_menu)
         self.chat.changed.connect(self._refresh_chat_menu)
@@ -110,6 +120,53 @@ class HsinSpriteWindow(QMainWindow):
         self._restore_state()
         self.setWindowOpacity(float(config["sprite"]["window"]["opacity"]))
         self.set_click_through(config["sprite"]["window"]["click_through"])
+        self.rest_timer = QTimer(self)
+        self.rest_timer.setInterval(1000)
+        self.rest_timer.timeout.connect(self._tick_rest)
+        self.rest_timer.start()
+        for signal in (self.chat.changed, self.tts.changed, self.stt.changed,
+                       self.voice_player.player.playbackStateChanged):
+            signal.connect(self._sync_rest_activity)
+        # 只接收本应用的操作，聊天/设置窗口中的输入同样算互动。
+        QApplication.instance().installEventFilter(self)
+
+    def _record_interaction(self):
+        self._last_interaction = time.monotonic()
+        view = self.sprite_view
+        motion = getattr(view, "model_info", {}).get("runtime", {}).get("motion", "idle")
+        if (view.renderer_name == "pmx" and view.model_loaded and not self._wake_requested
+                and (self._rest_requested or motion in {"lie_down", "side_lying"})):
+            self._wake_requested = True
+            view.trigger_motion("idle")
+
+    def _rest_pose_changed(self, motion):
+        if motion not in {"lie_down", "side_lying", "get_up"}:
+            self._rest_requested = self._wake_requested = False
+
+    def _rest_activity_busy(self):
+        stt = self.stt.snapshot()
+        return (self.drag_position is not None or self.chat.busy or self.tts.snapshot()["active"]
+                or self.voice_player.snapshot()["state"] != "StoppedState"
+                or stt["speech_active"] or stt["recognizing"])
+
+    def _sync_rest_activity(self, *_):
+        if self._rest_activity_busy():
+            self._record_interaction()
+
+    def _tick_rest(self):
+        if self._rest_activity_busy():
+            self._record_interaction()
+            return
+        view = self.sprite_view
+        if not self.isVisible() or view.renderer_name != "pmx" or not view.model_loaded:
+            self._last_interaction = time.monotonic()
+            return
+        motion = view.model_info.get("runtime", {}).get("motion", "idle")
+        if (not self._rest_requested and not self._wake_requested and motion == "idle"
+                and time.monotonic() - self._last_interaction >= IDLE_REST_SECONDS
+                and "side_lying" in view.get_available_motions()):
+            self._rest_requested = True
+            view.trigger_motion("side_lying")
 
     def _setup_window(self):
         # 复用参考窗口标志：透明、无边框、工具窗口，不抢输入焦点。
@@ -171,6 +228,7 @@ class HsinSpriteWindow(QMainWindow):
         menu.addAction("隐藏心", self.hide_sprite)
         menu.addAction("回到屏幕右下角", self.position_bottom_right)
         menu.addAction("和心聊天…", self.open_chat)
+        menu.addAction("设置…", self.open_settings)
         menu.addAction("番茄钟…", self.open_pomodoro)
         mood_menu = menu.addMenu("心情与好感度")
         self._mood_status_action = mood_menu.addAction("")
@@ -309,7 +367,8 @@ class HsinSpriteWindow(QMainWindow):
     def _refresh_chat_menu(self):
         for provider, action in self._backend_actions.items():
             action.setChecked(provider == self.chat.provider)
-        self._chat_status_action.setText("正在回复…" if self.chat.busy else (self.chat.error or "可以开始对话"))
+        self._chat_status_action.setText("基础陪伴 · 可在设置中开启 AI 对话" if not self.chat.config.get("enabled", True)
+            else "正在回复…" if self.chat.busy else (self.chat.error or "可以开始对话"))
 
     def _sync_chat_language(self):
         if self.tts.language != self._chat_language:
@@ -321,9 +380,27 @@ class HsinSpriteWindow(QMainWindow):
             return
         self._speech_chat_generation = self.chat.generation
         self._speech_token = None
+        self._bubble_audio_token = None
+        if self.chat.busy:
+            self.reply_bubble.start()
+        else:
+            self.reply_bubble.stop()
+            self.bubble_widget.hide()
         self.tts.stop()
-        if self.chat.busy and self.tts.enabled and self.tts.snapshot()["configured"]:
+        if self.chat.busy and self.tts.enabled and self.tts.snapshot()["configured"] and self.chat.last_request.get("speech_scope") != "off":
             self._speech_token = self.tts.begin_stream(self.chat.last_request["language"])
+            self._bubble_audio_token = self._speech_token
+            self.reply_bubble.set_audio_pending(True)
+
+    def _update_reply_bubble(self):
+        if self.chat.busy and self.chat.generation == self._speech_chat_generation:
+            self.reply_bubble.update(self.chat.partial)
+
+    def _sync_bubble_audio(self):
+        state = self.tts.snapshot()
+        pending = (self._bubble_audio_token is not None and self.tts.generation == self._bubble_audio_token
+                   and (state["streaming"] or state["active"]))
+        self.reply_bubble.set_audio_pending(pending)
 
     def _chat_sentence(self, generation, text, language):
         if generation == self._speech_chat_generation and self._speech_token is not None:
@@ -339,9 +416,9 @@ class HsinSpriteWindow(QMainWindow):
         self._speech_token = None
 
     def _show_spoken_text(self, text):
-        if self.tts.last_request and self.tts.last_request.get("stream"):
-            full = self.chat.partial or (self.chat.snapshot()["reply"] or text)
-            self.show_message(full[:2000], 12000)
+        if self.tts.last_request and self.tts.last_request.get("stream") and self.tts.last_request.get("source") == "chat":
+            if self.tts.generation == self._bubble_audio_token:
+                self.reply_bubble.playing(text, self.tts.snapshot()["playing_segment"])
         else:
             self.show_message(text, 8000)
 
@@ -364,6 +441,8 @@ class HsinSpriteWindow(QMainWindow):
     def _model_actions_ready(self, success):
         if self.sprite_view.renderer_name != "pmx":
             return
+        self._last_interaction = time.monotonic()
+        self._rest_requested = self._wake_requested = False
         for name, action in self._motion_actions.items():
             action.setEnabled(success and name in self.sprite_view.get_available_motions())
         for name, action in self._expression_actions.items():
@@ -390,8 +469,7 @@ class HsinSpriteWindow(QMainWindow):
             self.show_message("麦克风已开启，说完停顿后我会回复。", 5000)
 
     def configure_microphone(self):
-        from src.ui.microphone_dialog import MicrophoneDialog
-        MicrophoneDialog(self).exec()
+        self.open_settings(page=2)
 
     def _refresh_microphone_menu(self):
         state = self.stt.snapshot()
@@ -419,8 +497,25 @@ class HsinSpriteWindow(QMainWindow):
         return self.chat.configure(provider)
 
     def configure_chat(self):
-        from src.ui.connection_dialog import ConnectionDialog
-        ConnectionDialog(self).exec()
+        self.open_settings(page=0)
+
+    def open_settings(self, *, first_run=False, page=0):
+        from src.ui.settings_dialog import SettingsDialog
+        if self.settings_dialog is None:
+            self.settings_dialog = SettingsDialog(self, first_run=first_run, page=page)
+            self.settings_dialog.finished.connect(self._settings_closed)
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+
+    def _settings_closed(self, *_):
+        self.settings_dialog.deleteLater()
+        self.settings_dialog = None
+
+    def show_first_run_setup(self):
+        from src.core.user_settings import needs_setup
+        if needs_setup(self.config):
+            self.open_settings(first_run=True)
 
     def open_chat(self):
         from src.ui.chat_dialog import ChatDialog
@@ -429,7 +524,30 @@ class HsinSpriteWindow(QMainWindow):
         self.chat_dialog.open_near(self)
 
     def send_chat(self, text, language=None):
+        self._record_interaction()
         return self.chat.send(text, self.tts.language if language is None else language)
+
+    def set_chat_preferences(self, **settings):
+        result = self.chat.configure_preferences(**settings)
+        self.config["chat"].update(self.chat.config)
+        return result
+
+    def read_chat_text(self, text):
+        from src.core.speech_stream import SentenceStream
+        if self.chat.busy:
+            raise ValueError("请等待回复完成，再选择重读范围")
+        if not self.tts.enabled or not self.tts.snapshot()["configured"]:
+            raise ValueError("请先在设置中开启并配置语音")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("请先选择要朗读的文字，或等待一条回复")
+        segments = SentenceStream().finish(text)
+        if not segments:
+            raise ValueError("所选内容没有可朗读的文字")
+        self.stop_chat()
+        token = self.tts.begin_stream(self.tts.language, source="manual")
+        for segment in segments:
+            self.tts.enqueue_sentence(token, segment, self.tts.language, translate=self.tts.auto_translate)
+        self.tts.finish_stream(token)
 
     def stop_chat(self):
         self.chat.stop()
@@ -439,9 +557,11 @@ class HsinSpriteWindow(QMainWindow):
         if self.chat.last_request and self.chat.last_request["id"] == self.chat.generation and self.chat.generation != self._mood_chat_generation:
             self._mood_chat_generation = self.chat.generation
             self.mood.interact("chat")
-        self.show_message(text[:2000], 12000)
+        self.reply_bubble.finish(text)
+        self._sync_bubble_audio()
 
     def show_sprite(self):
+        self._record_interaction()
         self.show()
         self.raise_()
 
@@ -571,9 +691,10 @@ class HsinSpriteWindow(QMainWindow):
         self._model_actions_ready(False)
         self.sprite_view.load_model(project_path(forms[form]))
 
-    def _play_motion(self, group):
+    def _play_motion(self, group, index=0):
+        self._record_interaction()
         if self.sprite_view.model_loaded:
-            self.sprite_view.trigger_motion(group)
+            return self.sprite_view.trigger_motion(group, index)
 
     def set_physics(self, enabled):
         self._physics_action.setChecked(enabled)
@@ -591,6 +712,7 @@ class HsinSpriteWindow(QMainWindow):
             self._follow_action.setChecked(settings["mouse_follow"])
 
     def _touch_reaction(self, part):
+        self._record_interaction()
         names = {"head": "头部", "chest": "胸部", "body": "身体", "hand": "手", "tail": "尾巴"}
         self.touch_event.emit("tap", names.get(part, "身体"))
         if self.sprite_view._behavior_settings["touch_reactions"]:
@@ -617,9 +739,16 @@ class HsinSpriteWindow(QMainWindow):
         state = self.tts.snapshot()
         phases = {"queued": "准备语音…", "translating": "文本翻译中…", "synthesizing": "语音合成中…", "fallback": "备用音色合成中…"}
         ready = "心的音色已就绪" if self.tts.engine == "gptsovits" else "Edge 通用音色已就绪"
+        if self.tts.engine == "gptsovits" and state["preset_voice"] and not state["trained_voice"]:
+            ready = "中日预存语音可用 · 新句需音色配置或 Edge"
+        warmup = state["warmup"]
+        if warmup["state"] == "warming":
+            ready = "心的音色正在后台预热…"
+        elif warmup["state"] == "failed":
+            ready = "后台预热失败，开口时重试"
         self._voice_status_action.setText(phases.get(state["stage"], "语音合成中…") if state["synthesizing"] else
             ("语音出错，请查看日志" if state["error"] else state["warning"] or (ready if state["configured"] else "所选语音引擎尚未就绪")))
-        self._voice_status_action.setToolTip(state["error"] or state["warning"] or "")
+        self._voice_status_action.setToolTip(state["error"] or state["warning"] or warmup["error"] or "")
 
     def preview_voice(self):
         text = PREVIEW_PHRASES[self.tts.language]
@@ -637,6 +766,9 @@ class HsinSpriteWindow(QMainWindow):
                 self.show_message(str(exc), 6000)
 
     def eventFilter(self, watched, event):
+        if isinstance(watched, QWidget) and event.type() in {
+                QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress, QEvent.Type.Wheel}:
+            self._record_interaction()
         if watched in (self.central_widget, self.sprite_view) and self._pointer_event(event):
             return True
         return super().eventFilter(watched, event)
@@ -768,7 +900,12 @@ class HsinSpriteWindow(QMainWindow):
         temp.replace(self._state_path)
 
     def cleanup(self):
+        self.rest_timer.stop()
+        self.reply_bubble.stop()
+        QApplication.instance().removeEventFilter(self)
         self.save_state()
+        if self.settings_dialog:
+            self.settings_dialog.close()
         self.mood.close()
         if self.mood_dialog:
             self.mood_dialog.close()

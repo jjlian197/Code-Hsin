@@ -1,0 +1,4 @@
+interface:
+  display_name: "桌面精灵工程经验"
+  short_description: "迁移心项目的角色动作、语音气泡、状态管理与 Windows 发行经验"
+  default_prompt: "使用 $desktop-spirit-engineering 检查 Aemeath spirit，并针对当前问题迁移适用的经验。"

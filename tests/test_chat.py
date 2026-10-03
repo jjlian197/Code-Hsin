@@ -78,6 +78,20 @@ class ProtocolTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError,"中断"):
             await read_sse(Lines(),delta)
 
+    async def test_sse_token_limit_is_reported_without_losing_reply(self):
+        class Lines:
+            def __aiter__(self):
+                async def gen():
+                    for line in (b'data: {"choices":[{"delta":{"content":"partial"}}]}\n', b'\n',
+                                 b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n', b'\n', b'data: [DONE]\n', b'\n'):
+                        yield line
+                return gen()
+        chunks, limits = [], []
+        async def delta(text): chunks.append(text)
+        self.assertEqual(await read_sse(Lines(), delta, on_limit=lambda: limits.append(True)), "partial")
+        self.assertEqual(chunks, ["partial"])
+        self.assertEqual(limits, [True])
+
 
 class ManagerTest(unittest.TestCase):
     @classmethod
@@ -94,7 +108,7 @@ class ManagerTest(unittest.TestCase):
     def test_switch_discards_late_result_persists_provider_and_delivers_on_gui(self):
         started=threading.Event()
         class Backend:
-            async def chat(self,text,language,delta):
+            async def chat(self,text,language,delta, **kwargs):
                 if text=="old":
                     started.set()
                     try: await asyncio.sleep(10)
@@ -130,7 +144,7 @@ class ManagerTest(unittest.TestCase):
 
     def test_final_suffix_sentences_and_failed_stream_signal(self):
         class Backend:
-            async def chat(self, text, language, delta):
+            async def chat(self, text, language, delta, **kwargs):
                 await delta("御者，我在。")
                 if text == "error":
                     raise RuntimeError("fixture interrupted")
@@ -152,6 +166,42 @@ class ManagerTest(unittest.TestCase):
                 self.assertEqual(finishes[-1], (request["id"], False))
             finally:
                 manager.close()
+
+    def test_long_reply_scope_changes_preserve_text_and_preferences(self):
+        reply = "这是完整的一句话。" * 100
+        lengths = []
+        class Backend:
+            async def chat(self, text, language, delta, *, reply_length="normal"):
+                lengths.append(reply_length)
+                await delta(reply[:300])
+                await delta(reply[300:])
+                return reply
+        with tempfile.TemporaryDirectory() as temp, patch("src.core.chat_manager.make_backend", return_value=Backend()):
+            config = deepcopy(DEFAULT_CONFIG)
+            config["runtime"]["directory"] = temp
+            manager = ChatManager(config)
+            spoken = []
+            manager.sentence_ready.connect(lambda _, text, __: spoken.append(text))
+            try:
+                for scope, expected in (("full", reply), ("sentences", "这是完整的一句话。" * 3), ("off", "")):
+                    spoken.clear()
+                    manager.configure_preferences(speech_scope=scope, reply_length="detailed")
+                    manager.send("检查", "zh")
+                    self.pump(lambda: not manager.busy)
+                    self.assertEqual("".join(spoken), expected)
+                    self.assertEqual(manager.messages[-1], ("心", reply))
+                self.assertEqual(lengths, ["detailed"] * 3)
+                with self.assertRaises(ValueError):
+                    manager.configure_preferences(speech_scope="prefix", speech_prefix_chars=0)
+                self.assertEqual(manager.config["speech_scope"], "off")
+            finally:
+                manager.close()
+            restored = ChatManager(config)
+            try:
+                self.assertEqual(restored.config["speech_scope"], "off")
+                self.assertEqual(restored.config["reply_length"], "detailed")
+            finally:
+                restored.close()
 
 
 if __name__ == "__main__":
