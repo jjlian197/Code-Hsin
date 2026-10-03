@@ -58,6 +58,58 @@ class QtWindowTestCase(unittest.TestCase):
             time.sleep(0.003)
 
 class DesktopTest(QtWindowTestCase):
+    def test_view_selection_api_persistence_and_invalid_mode(self):
+        from unittest.mock import Mock
+        view = self.window.sprite_view
+        view.renderer_name = "pmx"
+        view.set_view_mode = Mock()
+        self.window._view_actions = {}
+        bridge = ControlBridge(self.window)
+        bridge.dispatch({"type": "window", "data": {"action": "view", "mode": "head_right"}})
+        view.set_view_mode.assert_called_with("head_right")
+        self.assertEqual(bridge.dispatch({"type": "get_status"})["data"]["window"]["view_mode"], "head_right")
+        self.window.view_mode = "full"
+        self.window._restore_state()
+        self.assertEqual(self.window.view_mode, "head_right")
+        self.window._fit_pose_window("side_lying")
+        self.window._fit_pose_window("idle")
+        self.assertEqual(self.window.view_mode, "head_right")
+        for bad in (None, [], "unknown"):
+            with self.assertRaises(ValueError):
+                self.window.set_view_mode(bad)
+        self.assertEqual(self.window.view_mode, "head_right")
+
+    def test_head_canvas_width_scaling_and_side_view_switch_restore(self):
+        from unittest.mock import Mock
+        self.window.sprite_view.renderer_name = "pmx"
+        self.window.sprite_view.set_view_mode = Mock()
+        self.window._view_actions = {}
+        original = (self.window.width(), self.window.height())
+        self.window.set_view_mode("head_left")
+        wide = (self.window.width(), self.window.height())
+        area = self.window.screen().availableGeometry()
+        self.assertEqual(wide, (min(area.width(), round(original[0] * 2.5)), min(area.height(), original[1])))
+        self.window.set_view_mode("head_right")
+        position = self.window.pos()
+        self.window.set_view_mode("head_right")
+        self.assertEqual(self.window.pos(), position)
+        self.assertEqual((self.window.width(), self.window.height()), wide)
+        self.window._resize_scale(.8)
+        self.assertEqual((self.window.width(), self.window.height()), (min(area.width(), round(original[0] * 2)), min(area.height(), round(original[1] * .8))))
+        self.window._fit_pose_window("side_lying")
+        lying = (self.window.width(), self.window.height())
+        self.window.set_view_mode("full")
+        self.assertEqual((self.window.width(), self.window.height()), lying)
+        self.window._fit_pose_window("idle")
+        self.assertEqual((self.window.width(), self.window.height()), (round(original[0] * .8), round(original[1] * .8)))
+        self.window.set_view_mode("head_front")
+        self.window._fit_pose_window("side_lying")
+        self.window._resize_scale(1)
+        self.window._fit_pose_window("idle")
+        self.assertEqual((self.window.width(), self.window.height()), wide)
+        self.window.set_view_mode("full")
+        self.assertEqual((self.window.width(), self.window.height()), original)
+
     def test_side_pose_window_fits_screen_and_restores_size(self):
         original = (self.window.width(), self.window.height())
         self.window.position_bottom_right()
@@ -281,7 +333,7 @@ class DesktopTest(QtWindowTestCase):
         self.window.move(100, 100)
         self.window.save_state()
         state = json.loads((Path(self.temp.name) / "window.json").read_text())
-        self.assertEqual(state, {"x": 100, "y": 100})
+        self.assertEqual(state, {"x": 100, "y": 100, "view_mode": "full"})
 
     def test_companion_priority_and_drag_release(self):
         from unittest.mock import Mock, patch

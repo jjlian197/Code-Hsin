@@ -37,12 +37,13 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 | `window` | `action: quit` | 先返回响应，再正常清理并退出 |
 | `window` | `action: click_through`, `enabled` | 鼠标穿透；可由托盘恢复 |
 | `window` | `action: always_on_top`, `enabled` | 调整置顶 |
+| `window` | `action: view`, `mode: full/head_front/head_left/head_right` | 全身/正面与左右斜侧大头模式；躺稳后近景关注上半身，躺下/起身过程临时全身 |
 | `background` | `type: transparent/purple/有效颜色` | 透明、渐变或纯色背景 |
 | `background` | `type: image`, `path` | 本地图片背景；相对路径以项目根目录为基准 |
 | `model` | `form: first/second` | 异步切换形态，返回 `model_loading`；查询状态确认完成 |
 | `expression` | `name` | normal、happy、sad、angry、surprised、wink、sleepy、relaxed、blush、content、star_eyes、heart_eyes |
-| `motion` | `group`, `index: 0` | idle、nod、wave、peace（V）、finger_heart（指尖比心）、crossed_arms；tap 为 wave 的兼容别名；外部 VMD 按配置组与索引播放 |
-| `physics` | `action: on/off/reset` | 开关或复位原生 MMD 刚体物理 |
+| `motion` | `group`, `index: 0` | idle、nod、wave、peace（V）、finger_heart（双手比心，保留旧组名）、crossed_arms（胸前 X 手势）；tap 为 wave 的兼容别名；外部 VMD 按配置组与索引播放 |
+| `physics` | `action: on/off/reset` | 开关或复位站立 MMD 刚体/侧躺骨骼布料物理 |
 | `look_at` | `x`, `y`，范围 -1–1 | 固定注视方向；x 正值向屏幕右，y 正值向上 |
 | `parameter` | `id`, `value` | 设置单个受支持参数，兼容 `param_id` |
 | `parameter_batch` | `params` | 一次设置多个参数；先完整验证，错误批次不部分应用 |
@@ -65,15 +66,17 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 `look_at` 持续保持目标，手动注视不受自动鼠标开关限制。发送 `behavior` 中的 `mouse_follow: true` 或 `reset_parameters: true` 可清除固定注视，恢复鼠标采样。`renderer.info.runtime.behavior` 提供实际眼神、眨眼、口型、呼吸、表情权重与最后一次触摸；`audio` 状态提供解码错误、实际音频缓冲数量和播放进度。
 
-基础动作返回 `motion_set`，外部 VMD 和本地侧躺 FBX 返回 `motion_loading`，物理控制返回 `physics_updated`。查询 `renderer.info.runtime` 可得到实际动作、物理偏好 `physics_enabled`、实际模拟状态 `physics_active`、步数、刚体/关节数量和骨骼变化；异步动作加载错误位于 `renderer.info.motion_error`。`available_motions` 包含基础动作和已配置的外部动作组，本地 FBX 存在时额外包含 `side_lying`。该姿势保持到手动退出，`pose_profile: stable_side` 时暂停衣发物理；发送 `motion` 的 `group: idle` 恢复站立和原物理偏好。JSON 成功响应说明指令已交给渲染器，异步动作需查询状态确认。详情见 [侧躺说明](ANIMATION.md#本地侧躺-fbx)。
+基础动作返回 `motion_set`，外部 VMD 和侧躺返回 `motion_loading`，物理控制返回 `physics_updated`。查询 `renderer.info.runtime` 可得到实际动作、物理偏好 `physics_enabled`、实际模拟状态 `physics_active`、步数和骨骼变化；异步错误位于 `renderer.info.motion_error`。本地 FBX 存在时额外提供 `side_lying`。已配置匹配的过渡产物时，实际状态依次为 `lie_down` → `side_lying`；发送 `group: idle` 后为 `get_up` → `idle`。`posture_state`、`transition_duration` 和 `queued_motion` 表示姿态、时长与排队动作；`lie_down/get_up` 是内部阶段，不能直接作为动作组调用。途中选择其他动作会等待安全起身，最后请求生效；站立后恢复物理偏好。JSON 成功响应说明指令已交给渲染器，仍需查询状态确认。重建与限制见 [过渡说明](SIDE_LYING_TRANSITION_PLAN.md)。
 
 `renderer.info.runtime.behavior.activity` 提供 `idle/thinking/speaking/listening` 和拖动占用状态，`activity_weights` 提供平滑姿态权重，`manual_motion` 标记主动动作，`idle_action` 提供当前环顾或伸展。对话状态由聊天、合成、识别与实际音频播放共同驱动；关闭 `conversation_actions` 只关闭姿态，口型继续工作。`random_idle` 独立控制随机小动作。手动表情会保持，不会被对话状态覆盖。
 
-拖动与点击分开处理。单击实际模型后按命中位置广播头部、身体、手或尾巴；透明空白处不广播。示例：
+拖动与点击分开处理。单击实际模型后按命中位置广播头部、胸部、身体、手或尾巴；透明空白、触摸关闭与 0.45 秒冷却期不广播。头脸→双手比心，胸部→双手比叉，手→V 手势，其他身体→挥手，尾巴→惊讶回头。侧躺和外部 VMD 保持原动作。`window.view_mode` 和 `renderer.info.runtime.view_mode` 表示偏好，runtime 的 `effective_view_mode` 表示当前取景，侧躺时为 `full`。示例：
 
 ```json
 {"type":"touch_event","data":{"action":"tap","part":"身体"}}
 ```
+
+过渡与侧躺开启物理时，`renderer.info.runtime.engine` 为 `骨骼布料/PBD`，`physics_active: true`；站立使用 `Ammo/Bullet`。`cloth` 提供 `active`、粒子/约束数量、模拟步数、最大偏移、自由粒子最低高度和地面高度。关闭物理停止侧躺模拟，动作和显示地面约束继续运行；重置重新初始化衣发粒子，不改变动作阶段。骨骼布料包含身体/地面约束，不含逐三角形自碰撞。
 
 ## 对话后端
 

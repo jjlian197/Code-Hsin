@@ -1,4 +1,4 @@
-"""原生双形态侧躺预览与保持/退出检查，使用本机 FBX 和临时状态。"""
+"""保留 FBX 定格回退路径的原生检查；CMU 过渡见 verify_pose_transitions。"""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -19,6 +19,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     config = load_config()
     config["voice"]["enabled"] = False
+    config["sprite"]["animation"].pop("transitions", None)
     temp = tempfile.TemporaryDirectory()
     config["runtime"]["directory"] = temp.name
     window = HsinSpriteWindow(config)

@@ -84,6 +84,9 @@ def load_config(path=None):
         raise ValueError("animation.physics 需要布尔值")
     if not isinstance(animation.get("vmd", {}), dict):
         raise ValueError("animation.vmd 需要动作组对象")
+    transitions = animation.get("transitions", {})
+    if not isinstance(transitions, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.strip() for k, v in transitions.items()):
+        raise ValueError("animation.transitions 需要形态到本地动作文件的映射")
     if not isinstance(animation.get("side_lying", "Female Laying Pose (1).fbx"), str) or not animation.get("side_lying", "Female Laying Pose (1).fbx").strip():
         raise ValueError("animation.side_lying 需要非空本地 FBX 文件路径")
     behavior = animation.get("behavior", {})
@@ -91,7 +94,7 @@ def load_config(path=None):
             or type(v) is not bool for k, v in behavior.items()):
         raise ValueError("animation.behavior 需要受支持的布尔值设置")
     for group, files in animation.get("vmd", {}).items():
-        if not isinstance(group, str) or not group or group in {"idle", "wave", "nod", "tap", "peace", "finger_heart", "crossed_arms", "side_lying"}:
+        if not isinstance(group, str) or not group or group in {"idle", "wave", "nod", "tap", "peace", "finger_heart", "crossed_arms", "side_lying", "lie_down", "get_up"}:
             raise ValueError("VMD 动作组名称不能占用基础动作名")
         if not isinstance(files, list) or not files or any(not isinstance(f, str) or not f for f in files):
             raise ValueError("VMD 动作组需要非空文件路径列表")

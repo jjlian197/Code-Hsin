@@ -6,6 +6,10 @@ sprite:
     physics: true
     # 用户本地动作，不随源码分发；存在时显示“侧躺”菜单。
     side_lying: Female Laying Pose (1).fbx
+    # 根据本机 PMX 与 CMU 素材离线生成；模型更换后需重新校准。
+    transitions:
+      first: motions/hsin/first.json
+      second: motions/hsin/second.json
     behavior:
       auto_blink: true
       breathing: true

@@ -3,8 +3,17 @@ import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { configureMaterials } from './materials.js';
 import { AnimationRuntime, createPhysicsModule } from './animation_runtime.js';
 import { expressions, behaviorMorphNames } from './behavior.js';
+import { gestureGeometry } from './calibrated_gestures.js';
+import { classifyTouch, reactToTouch } from './interaction.js';
+import {installGroundSupport,setGroundSupport,visibleBounds} from './ground_support.js';
+import {transitionAssets} from './pose_transitions.js';
 
 let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
+let viewMode='full', headTarget=null, headScale=1;
+let upperBodyIndices=[];
+let cameraEase=null, cameraInitialized=false, previousPosture=null;
+const cameraCenter=new THREE.Vector3();
+const viewAngles={head_front:0,head_left:-0.55,head_right:0.55};
 const scene=new THREE.Scene();
 const camera=new THREE.OrthographicCamera(-10,10,15,-15,0.1,200);
 const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true,preserveDrawingBuffer:true});
@@ -22,8 +31,14 @@ scene.add(fill);
 
 function render(){renderer.render(scene,camera);}
 function reportRuntime(){
-  if(runtime && bridge)bridge.runtimeStatus(JSON.stringify({...runtime.snapshot(),interaction:interactionLayout()}));
+  if(runtime && bridge)bridge.runtimeStatus(JSON.stringify(snapshot()));
 }
+// 过渡保留全身；躺稳后同一套近景菜单改用横躺上半身取景。
+function effectiveViewMode(){return runtime?.poseProfile&&runtime.motion!=='side_lying'?'full':viewMode;}
+function snapshot(){return runtime?{...runtime.snapshot(),view_mode:viewMode,
+  effective_view_mode:effectiveViewMode(),interaction:interactionLayout(),
+  camera_frame:{height:camera.top-camera.bottom,floor_y:runtime.transitions?
+    (1-new THREE.Vector3(0,runtime.transitions.floor,0).project(camera).y)*innerHeight/2:null}}:null;}
 let lastFrame=0,lastReport=0;
 function animate(now,inputs={}){
   if(stopped)return;
@@ -34,34 +49,104 @@ function animate(now,inputs={}){
     if(inputs.audio)runtime.behavior.setAudio(inputs.audio.value,inputs.audio.active);
     if(inputs.activity)runtime.behavior.setActivity(inputs.activity);
     runtime.update(delta);render();
+    if(runtime.asyncMotionError){bridge.motionError(runtime.asyncMotionError);runtime.asyncMotionError=null;}
+    if(runtime.poseProfile!==previousPosture){previousPosture=runtime.poseProfile;
+      frameBounds=(runtime.poseProfile&&runtime.transitions?runtime.transitions.bounds:standingBounds).clone();resize(true);reportRuntime();}
+    if(cameraEase){
+      cameraEase.time+=Math.min(delta,.05);const t=Math.min(1,cameraEase.time/.65),w=t*t*t*(t*(t*6-15)+10);
+      const height=THREE.MathUtils.lerp(cameraEase.height,cameraEase.targetHeight,w),aspect=innerWidth/innerHeight;
+      camera.top=height/2;camera.bottom=-height/2;camera.left=-height*aspect/2;camera.right=height*aspect/2;
+      camera.position.lerpVectors(cameraEase.position,cameraEase.targetPosition,w);
+      const target=cameraEase.center.clone().lerp(cameraEase.targetCenter,w);cameraCenter.copy(target);camera.lookAt(target);camera.updateProjectionMatrix();
+      if(t===1)cameraEase=null;render();
+    }
   }
   if(now-lastReport>500){lastReport=now;reportRuntime();}
 }
-function resize(){
+function resize(smooth=false){
   const w=Math.max(innerWidth,1),h=Math.max(innerHeight,1),aspect=w/h;
   renderer.setSize(w,h);
   if(frameBounds){
     const size=frameBounds.getSize(new THREE.Vector3());
     const center=frameBounds.getCenter(new THREE.Vector3());
-    const viewHeight=Math.max(size.y*1.10,size.x/aspect*1.10);
+    let viewHeight=Math.max(size.y*1.10,size.x/aspect*1.10);
+    if(runtime?.transitions){
+      const bounds=runtime.transitions.bounds,floor=runtime.transitions.floor;
+      viewHeight=Math.max((standingBounds.max.y-floor)/.9,(bounds.max.y-floor)/.9);
+      if(runtime.poseProfile)viewHeight=Math.max(viewHeight,Math.max(Math.abs(bounds.min.x),Math.abs(bounds.max.x))*2/aspect/.9);
+      else viewHeight=Math.max(viewHeight,size.x/aspect*1.1);
+      center.set(0,floor+viewHeight*.45,0);
+    }
+    const closeUp=effectiveViewMode()!=='full'&&headTarget;
+    if(closeUp){
+      if(runtime?.motion==='side_lying'){
+        const frame=sideCloseUpFrame(viewAngles[viewMode],aspect);
+        center.copy(frame.center);viewHeight=frame.height;
+      }else{
+        center.copy(headTarget);
+        // 正常宽画布保留近景大小，窄屏仍给胸前手势留出余量。
+        viewHeight=Math.max(11.5,17.5/aspect)*headScale;
+      }
+    }
+    const oldHeight=camera.top-camera.bottom,oldPosition=camera.position.clone();
+    const oldCenter=cameraCenter.clone();
     camera.left=-viewHeight*aspect/2;camera.right=viewHeight*aspect/2;
     camera.top=viewHeight/2;camera.bottom=-viewHeight/2;
-    camera.position.set(center.x,center.y,55);
-    camera.lookAt(center.x,center.y,0);
+    if(closeUp){
+      const angle=viewAngles[viewMode];
+      camera.position.copy(center).add(new THREE.Vector3(Math.sin(angle)*45,0,Math.cos(angle)*45));
+      camera.lookAt(center);
+    }else{camera.position.set(center.x,center.y,55);camera.lookAt(center.x,center.y,0);}
     camera.updateProjectionMatrix();
+    cameraCenter.copy(center);
+    if(smooth&&cameraInitialized){
+      cameraEase={time:0,height:oldHeight,position:oldPosition,center:oldCenter,targetHeight:viewHeight,targetPosition:camera.position.clone(),targetCenter:center.clone()};
+      camera.position.copy(oldPosition);camera.top=oldHeight/2;camera.bottom=-oldHeight/2;camera.left=-oldHeight*aspect/2;camera.right=oldHeight*aspect/2;
+      camera.lookAt(oldCenter);camera.updateProjectionMatrix();
+      cameraCenter.copy(oldCenter);
+    }else cameraEase=null;
+    cameraInitialized=true;
   }
   render();
 }
-addEventListener('resize',resize);
+function setViewMode(mode){
+  if(mode!=='full'&&!Object.hasOwn(viewAngles,mode))return false;
+  viewMode=mode;resize(runtime?.motion==='side_lying');reportRuntime();return true;
+}
+addEventListener('resize',()=>resize(!!cameraEase));
 function fitCurrentPose(){
   if(!mesh)return;
   mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
   frameBounds=mesh.boundingBox.clone();resize();
 }
+function upperBodyPoints(){
+  if(!mesh)return [];
+  mesh.updateMatrixWorld(true);mesh.skeleton.update();
+  const support=mesh.userData.groundSupport,point=new THREE.Vector3();
+  return upperBodyIndices.map(i=>{
+    mesh.getVertexPosition(i,point);
+    if(support?.enabled.value)point.y=Math.max(point.y,support.floor.value+.035);
+    return point.clone().applyMatrix4(mesh.matrixWorld);
+  });
+}
+function sideCloseUpFrame(angle,aspect){
+  // 用当前蒙皮轮廓，不能沿用站立时缓存的胸口位置；排除腿、裙尾与尾巴。
+  const inverse=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),-angle);
+  const box=new THREE.Box3();
+  for(const point of upperBodyPoints())box.expandByPoint(point.applyQuaternion(inverse));
+  const center=box.getCenter(new THREE.Vector3()).applyQuaternion(inverse.invert());
+  const size=box.getSize(new THREE.Vector3());
+  return {center,height:Math.max(8.5*headScale,size.y*1.18,size.x/aspect*1.18)};
+}
+function upperBodyFraming(){
+  const points=upperBodyPoints().map(p=>p.project(camera));
+  return {fully_visible:points.length>0&&points.every(p=>[p.x,p.y,p.z].every(Number.isFinite)&&Math.abs(p.x)<=1&&Math.abs(p.y)<=1&&Math.abs(p.z)<=1),
+    left:Math.min(...points.map(p=>(p.x+1)/2)),right:Math.max(...points.map(p=>(p.x+1)/2)),
+    top:Math.min(...points.map(p=>(1-p.y)/2)),bottom:Math.max(...points.map(p=>(1-p.y)/2))};
+}
 function framing(){
   if(!mesh)return null;
-  mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
-  const box=mesh.boundingBox,points=[];
+  const box=visibleBounds(mesh),points=[];
   for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z])
     points.push(new THREE.Vector3(x,y,z).applyMatrix4(mesh.matrixWorld).project(camera));
   return {fully_visible:points.every(p=>[p.x,p.y,p.z].every(Number.isFinite)&&Math.abs(p.x)<=1&&Math.abs(p.y)<=1&&Math.abs(p.z)<=1),
@@ -85,6 +170,7 @@ function dispose(model){
 async function loadModel(url,requestId,textureOverrides={},options={}){
   const current=++generation;
   dispose(mesh);mesh=null;frameBounds=null;render();
+  cameraEase=null;cameraInitialized=false;previousPosture=null;
   let candidate;
   try{
     const loader=new MMDLoader();
@@ -109,22 +195,48 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     await materialsReady;
     if(current!==generation){dispose(candidate);return;}
     const materialInfo=configureMaterials(candidate.material);
+    installGroundSupport(candidate);
     const ammo=await createPhysicsModule();
     if(current!==generation){dispose(candidate);return;}
+    if(options.transition_url){
+      try{
+        const response=await fetch(options.transition_url);if(!response.ok)throw new Error('动作文件无法读取');
+        options.transitions=transitionAssets(await response.json(),options.model_hash,candidate);
+      }catch(error){options.transition_error=String(error.message||error);console.warn(options.transition_error);}
+      if(current!==generation){dispose(candidate);return;}
+    }
     runtime=new AnimationRuntime(candidate,ammo,options);
     candidate.updateMatrixWorld(true);
     candidate.skeleton.update();
     candidate.computeBoundingBox();
     frameBounds=candidate.boundingBox.clone();
     standingBounds=frameBounds.clone();
-    mesh=candidate;scene.add(mesh);resize();
+    mesh=candidate;
+    const chest=mesh.skeleton.bones.find(b=>b.name==='上半身2').getWorldPosition(new THREE.Vector3());
+    const neck=mesh.skeleton.bones.find(b=>b.name==='首').getWorldPosition(new THREE.Vector3());
+    headScale=chest.distanceTo(neck)/2.593;
+    headTarget=chest.clone().add(new THREE.Vector3(0,2.7,2).multiplyScalar(headScale));
+    const waist=mesh.skeleton.bones.find(b=>b.name==='上半身1').getWorldPosition(new THREE.Vector3()).y-.8*headScale;
+    const positions=mesh.geometry.attributes.position,skinIndex=mesh.geometry.attributes.skinIndex,skinWeight=mesh.geometry.attributes.skinWeight;
+    upperBodyIndices=[];
+    for(let i=0;i<positions.count;i++){
+      let lowerCloth=false,hand=false;
+      for(let j=0;j<4;j++)if(skinWeight.getComponent(i,j)>.15){
+        const name=mesh.skeleton.bones[skinIndex.getComponent(i,j)]?.name||'';
+        lowerCloth ||= /^Tail_|Dress|ZSpring_(Thigh|Calf|Leg)/.test(name);
+        hand ||= /^[左右](手首|[親人中薬小]指)/.test(name);
+      }
+      if(!lowerCloth&&(positions.getY(i)>=waist||hand))upperBodyIndices.push(i);
+    }
+    if(options.view_mode==='full'||Object.hasOwn(viewAngles,options.view_mode))viewMode=options.view_mode;
+    scene.add(mesh);resize();
     const supported=Object.keys(expressions).filter(name=>name==='normal'||
       Object.keys(expressions[name]).every(m=>m in mesh.morphTargetDictionary));
     const info={vertices:data.metadata.vertexCount,triangles:data.metadata.faceCount,
       bones:data.metadata.boneCount,materials:data.metadata.materialCount,morphs:originalMorphCount,
       active_morphs:data.morphs.length,expressions:supported,texture_errors:0,
       texture_overrides:Object.keys(textureOverrides).length,
-      material_alpha:materialInfo,motions:Object.keys(runtime.clips),runtime:runtime.snapshot()};
+      material_alpha:materialInfo,motions:Object.keys(runtime.clips),runtime:snapshot()};
     render();bridge.modelResult(requestId,true,JSON.stringify(info));
   }catch(error){
     dispose(candidate);
@@ -146,43 +258,38 @@ function interactionLayout(){
   return {face:{x:(position.x+1)/2,y:(1-position.y)/2},head_top:{x:(top.x+1)/2,y:(1-top.y)/2}};
 }
 const raycaster=new THREE.Raycaster();
-function touchAt(x,y){
+function pickTouch(x,y){
   if(!runtime||!mesh)return null;
   mesh.updateMatrixWorld(true);mesh.skeleton.update();
   raycaster.setFromCamera(new THREE.Vector2(x*2-1,1-y*2),camera);
   const hit=raycaster.intersectObject(mesh,false)[0];
   if(!hit)return null;
-  const world=name=>mesh.skeleton.bones.find(b=>b.name===name)?.getWorldPosition(new THREE.Vector3());
-  const head=world('頭'),neck=world('首'),hands=[world('右手首'),world('左手首')].filter(Boolean);
-  let part='body';
-  if(head&&neck&&(runtime.poseProfile?head.distanceTo(hit.point)<2.2:hit.point.y>neck.y&&Math.abs(hit.point.x-head.x)<1.6))part='head';
-  else if(hands.some(p=>p.distanceTo(hit.point)<1.2))part='hand';
-  else if(hit.face){
-    const indices=mesh.geometry.attributes.skinIndex,weights=mesh.geometry.attributes.skinWeight;
-    const names=[];
-    for(const vertex of [hit.face.a,hit.face.b,hit.face.c])for(let j=0;j<4;j++){
-      if(weights.getComponent(vertex,j)>0.25)names.push(mesh.skeleton.bones[indices.getComponent(vertex,j)]?.name||'');
-    }
-    // HairTail 是发辫，真正尾巴的蒙皮使用 Tail_*。
-    if(names.some(n=>/^Tail_|尾|しっぽ/i.test(n)))part='tail';
-  }
-  if(runtime.behavior.touch(part)&&part==='hand'&&runtime.motion==='idle')runtime.play('wave');
-  reportRuntime();return part;
+  let part=classifyTouch(mesh,hit);
+  const head=mesh.skeleton.bones.find(b=>b.name==='頭').getWorldPosition(new THREE.Vector3());
+  if(runtime.poseProfile&&head.distanceTo(hit.point)<2.2)part='head';
+  return {part,side:Math.sign(hit.point.x-head.x)||1};
+}
+function touchAt(x,y){
+  const hit=pickTouch(x,y);
+  if(!hit||!reactToTouch(runtime,hit.part,hit.side))return null;
+  reportRuntime();return hit.part;
 }
 function playMotion(name,url=null){
   if(!runtime)return false;
   if(name==='side_lying'&&url){
     const active=runtime;
-    active.loadSideLying(url).then(()=>{if(active===runtime&&active.motion==='side_lying'){fitCurrentPose();reportRuntime();}})
+    active.loadSideLying(url).then(()=>{if(active===runtime&&active.poseProfile){
+      if(active.transitions){frameBounds=active.transitions.bounds.clone();previousPosture=active.poseProfile;resize(true);}
+      else fitCurrentPose();reportRuntime();}})
       .catch(error=>{if(active===runtime)bridge.motionError(String(error.message||error));});
   }else if(url){
     const active=runtime;
     active.loadVmd(url,name).then(()=>{if(active===runtime&&!active.poseProfile){frameBounds=standingBounds.clone();resize();reportRuntime();}})
       .catch(error=>{console.error(error);if(active===runtime)bridge.motionError(String(error.message||error));});
-  }else{runtime.play(name);frameBounds=standingBounds.clone();resize();reportRuntime();}
+  }else{runtime.play(name);if(!runtime.poseProfile){frameBounds=standingBounds.clone();resize();}reportRuntime();}
   return true;
 }
-window.HsinPmx={loadModel,setExpression,playMotion,
+window.HsinPmx={loadModel,setExpression,playMotion,setViewMode,
   touchAt,
   setParameters:params=>runtime?.behavior.setParameters(params),
   setLookAt:(x,y)=>runtime?.behavior.setPointer(x,y,true),
@@ -198,8 +305,56 @@ window.HsinPmx={loadModel,setExpression,playMotion,
   setPhysics:enabled=>{if(runtime){runtime.setPhysics(enabled);reportRuntime();}},
   resetPhysics:()=>{if(runtime){runtime.resetPhysics();reportRuntime();}},
   setPaused:paused=>{if(runtime){runtime.paused=paused;runtime.behavior.suspend();lastFrame=0;reportRuntime();}},
-  snapshot:()=>runtime?.snapshot(),
+  snapshot,
   framing,
+  upperBodyFraming,
   dispose:()=>{stopped=true;generation++;dispose(mesh);mesh=null;renderer.dispose();}};
+// 开发检查只改镜头、不改姿态；正常窗口不会调用。重置后仍沿用产品原有取景。
+window.HsinPmxDebug={
+  previewTransition:async(url,name,time)=>{
+    const data=await fetch(url).then(r=>r.json());
+    runtime.behavior.prepareFrame();runtime.helper.enable('physics',false);runtime.paused=true;
+    mesh.skeleton.bones.forEach((b,i)=>{b.position.copy(runtime.bindPose[i].position);b.quaternion.copy(runtime.bindPose[i].rotation);});
+    const bones=new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
+    for(const track of [...data.freeze,...data.clips[name].tracks]){
+      const bone=bones.get(track.name.match(/\.bones\[(.*?)\]/)[1]);
+      const key=track.type==='quaternion'?new THREE.QuaternionKeyframeTrack(track.name,track.times,track.values):new THREE.VectorKeyframeTrack(track.name,track.times,track.values);
+      const value=key.createInterpolant().evaluate(time);
+      if(track.type==='quaternion')bone.quaternion.fromArray(value);else bone.position.fromArray(value);
+    }
+    runtime.helper.objects.get(mesh).grantSolver.update();
+    mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
+    setGroundSupport(mesh,data.floor,true);
+    frameBounds=new THREE.Box3(new THREE.Vector3(-16,-1,-15),new THREE.Vector3(16,25,15));resize();
+    return {bounds:{min:mesh.boundingBox.min.toArray(),max:mesh.boundingBox.max.toArray()},geometry:gestureGeometry(mesh)};
+  },
+  geometry:()=>mesh?gestureGeometry(mesh):null,
+  visibleBandFraming:()=>{
+    if(!mesh)return null;
+    // 全身包围盒的空角和画面下方的裙摆不能代表近景手臂是否裁切。
+    mesh.updateMatrixWorld(true);mesh.skeleton.update();
+    let left=Infinity,right=-Infinity;
+    const p=new THREE.Vector3();
+    for(let i=0;i<mesh.geometry.attributes.position.count;i++){
+      mesh.getVertexPosition(i,p).applyMatrix4(mesh.matrixWorld).project(camera);
+      if(p.y>=-1&&p.y<=1){left=Math.min(left,(p.x+1)/2);right=Math.max(right,(p.x+1)/2);}
+    }
+    return {left,right,width:innerWidth,height:innerHeight};
+  },
+  pickTouch:(x,y)=>pickTouch(x,y)?.part||null,
+  projectPoint:coords=>{
+    const p=new THREE.Vector3(...coords).project(camera);return {x:(p.x+1)/2,y:(1-p.y)/2};
+  },
+  view:(angle=0)=>{
+    if(!mesh)return;
+    const chest=mesh.skeleton.bones.find(b=>b.name==='上半身2').getWorldPosition(new THREE.Vector3());
+    const target=chest.clone().add(new THREE.Vector3(0,1.7,2));
+    const h=7.5,aspect=Math.max(innerWidth,1)/Math.max(innerHeight,1);
+    camera.left=-h*aspect/2;camera.right=h*aspect/2;camera.top=h/2;camera.bottom=-h/2;
+    camera.position.copy(target).add(new THREE.Vector3(Math.sin(angle)*45,0,Math.cos(angle)*45));
+    camera.lookAt(target);camera.updateProjectionMatrix();render();
+  },
+  resetView:()=>resize(),
+};
 new QWebChannel(qt.webChannelTransport,channel=>{bridge=channel.objects.pmxBridge;bridge.viewerReady();});
 resize();

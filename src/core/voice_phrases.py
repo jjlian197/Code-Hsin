@@ -17,3 +17,7 @@ FOND_TOUCH_REPLIES = {
     "zh": {"head": "御者，这样安静地陪着你，我很喜欢。", "body": "心意不必说尽，我会一直认真听。", "hand": "牵着我的手吧，御者。", "tail": "又在逗我呀，御者。轻一点喔。"},
     "ja": {"head": "御者、こうして静かにそばにいるのが好きよ。", "body": "全部言葉にしなくてもいいわ。ちゃんと聞いているから。", "hand": "私の手を取って、御者。", "tail": "またからかっているのね、御者。優しくしてね。"},
 }
+# 胸部触摸配合双手比叉；各好感阶段都保持明确、温和的回应。
+for replies in (TOUCH_REPLIES, TRUSTED_TOUCH_REPLIES, FOND_TOUCH_REPLIES):
+    replies["zh"]["chest"] = "御者，这里可不行喔。"
+    replies["ja"]["chest"] = "御者、そこはだめよ。"

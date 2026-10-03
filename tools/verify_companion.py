@@ -61,7 +61,7 @@ def main():
             menu = await probe.call(lambda f: f.set_result({
                 "motions": [n for n, a in window._motion_actions.items() if a.isEnabled()],
                 "expressions": [n for n, a in window._expression_actions.items() if a.isEnabled()]}))
-            assert len(menu["motions"]) == 6 and len(menu["expressions"]) == 12, menu
+            assert {"idle", "nod", "wave", "peace", "finger_heart", "crossed_arms"}.issubset(menu["motions"]) and len(menu["expressions"]) == 12, menu
             for physics in (True, False):
                 await probe.evaluate(f"window.HsinPmx.setPhysics({str(physics).lower()});")
                 for state in ("thinking", "speaking", "listening", "idle"):
@@ -84,9 +84,9 @@ def main():
                         report["captures"].append(await capture(f"{form}-{state}-{physics}"))
                 for motion in ("peace", "finger_heart", "crossed_arms"):
                     await probe.evaluate(f"window.HsinPmx.playMotion({json.dumps(motion)});")
-                    snapshot = await tick(35)
+                    snapshot = await tick(60)
                     assert snapshot["motion"] == motion and snapshot["behavior"]["manual_motion"]
-                    if motion != "crossed_arms":
+                    if motion == "peace":
                         assert snapshot["right_palm_normal"][2] > .95
                     report["captures"].append(await capture(f"{form}-{motion}-{physics}"))
                     snapshot = await tick(90)

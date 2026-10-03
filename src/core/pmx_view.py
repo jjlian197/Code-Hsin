@@ -4,7 +4,7 @@ import time
 
 from loguru import logger
 from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QCursor
+from PyQt6.QtGui import QColor, QCursor, QPixmap
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -46,7 +46,7 @@ class PmxView(QWidget):
     load_finished = pyqtSignal(bool)
     pose_changed = pyqtSignal(str)
 
-    def __init__(self, model_path, parent=None, texture_overrides=None, animation_config=None):
+    def __init__(self, model_path, parent=None, texture_overrides=None, animation_config=None, transition_files=None):
         super().__init__(parent)
         self.model_path = model_path
         self.model_loaded = False
@@ -57,8 +57,10 @@ class PmxView(QWidget):
         self._closed = False
         self._request_id = 0
         self._pose_motion = "idle"
+        self.view_mode = "full"
         self._texture_overrides = texture_overrides or {}
         self._animation_config = animation_config or {}
+        self._transition_files = transition_files or {}
         self._physics_enabled = self._animation_config.get("physics", True)
         self._frame_pending = False
         self._behavior_settings = {"auto_blink": True, "breathing": True, "mouse_follow": True, "touch_reactions": True,
@@ -92,6 +94,12 @@ class PmxView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.web)
+        self._loading_pixmaps = {"standing": QPixmap(str(project_path("src/assets/loading/standing.png"))),
+                                 "lying": QPixmap(str(project_path("src/assets/loading/lying.png")))}
+        self.loading_image = QLabel(self)
+        self.loading_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_image.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.loading_image.setStyleSheet("background: transparent;")
         self.label = QLabel("心正在准备…", self)
         self.label.setWordWrap(True)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -157,7 +165,11 @@ class PmxView(QWidget):
         self.current_expression = "normal"
         self._request_id += 1
         self.label.setText("心正在准备…")
+        self._layout_loading()
+        self.loading_image.show()
+        self.loading_image.raise_()
         self.label.show()
+        self.label.raise_()
         self.timer.start(45000)
         if self._ready:
             url = QUrl.fromLocalFile(str(path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
@@ -168,7 +180,12 @@ class PmxView(QWidget):
                     raise ValueError("贴图补全文件不存在：" + str(target_path))
                 source_url = url[:url.rfind('/') + 1] + source.replace('\\', '/')
                 overrides[source_url] = QUrl.fromLocalFile(str(target_path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-            options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input}
+            options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input, "view_mode": self.view_mode}
+            transition = self._transition_files.get(str(path))
+            if transition and project_path(transition).is_file():
+                import hashlib
+                options["transition_url"] = QUrl.fromLocalFile(str(project_path(transition))).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+                options["model_hash"] = hashlib.sha256(path.read_bytes()).hexdigest()
             self.web.page().runJavaScript(f"window.HsinPmx.loadModel({json.dumps(url)}, {self._request_id}, {json.dumps(overrides)}, {json.dumps(options)});")
 
     @pyqtSlot(int, bool, str)
@@ -185,6 +202,8 @@ class PmxView(QWidget):
             if runtime.get("behavior", {}).get("settings") != self._behavior_settings:
                 self.set_behavior(self._behavior_settings)
             self.label.hide()
+            self.loading_image.hide()
+            self.set_view_mode(self.view_mode)
             self.web.page().runJavaScript(f"window.HsinPmx.setPaused({json.dumps(not self.isVisible())});")
             self.frame_timer.start()
             self.set_activity(**self._activity_input, force=True)
@@ -243,6 +262,11 @@ class PmxView(QWidget):
     def set_physics(self, enabled):
         self._physics_enabled = enabled
         self.web.page().runJavaScript(f"window.HsinPmx.setPhysics({json.dumps(enabled)});")
+
+    def set_view_mode(self, mode):
+        self.view_mode = mode
+        if self._ready and self.model_loaded:
+            self.web.page().runJavaScript(f"window.HsinPmx.setViewMode({json.dumps(mode)});")
 
     def reset_physics(self):
         self.web.page().runJavaScript("window.HsinPmx.resetPhysics();")
@@ -324,7 +348,16 @@ class PmxView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.label.setGeometry(20, max(20, self.height() // 2 - 50), max(120, self.width() - 40), 100)
+        self._layout_loading()
+
+    def _layout_loading(self):
+        # 按画布方向选图，完整保留原图比例与署名；提示放在图下方。
+        width, height = self.width(), self.height()
+        artwork = self._loading_pixmaps["lying" if width > height else "standing"]
+        self.loading_image.setGeometry(12, 12, max(1, width - 24), max(1, height - 94))
+        self.loading_image.setPixmap(artwork.scaled(self.loading_image.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                   Qt.TransformationMode.SmoothTransformation))
+        self.label.setGeometry(20, max(12, height - 72), max(1, width - 40), 56)
 
     def cleanup(self):
         self._closed = True

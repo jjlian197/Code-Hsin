@@ -123,7 +123,8 @@ class ControlBridge(QObject):
                       "available_motions": view.get_available_motions() if hasattr(view, "get_available_motions") else [],
                       "window": {"visible": window.isVisible(), "width": window.width(), "height": window.height(),
                                  "opacity": window.windowOpacity(), "click_through": window.is_click_through,
-                                 "always_on_top": window._always_on_top, "background": window._current_background},
+                                 "always_on_top": window._always_on_top, "background": window._current_background,
+                                 "view_mode": window.view_mode},
                       "renderer": {"name": view.renderer_name, "model_loaded": view.model_loaded,
                                    "model_path": str(view.model_path) if view.model_path else None,
                                    "model_file_exists": bool(view.model_path and view.model_path.is_file()),
@@ -227,6 +228,8 @@ class ControlBridge(QObject):
                 window.set_click_through(boolean(data.get("enabled"), "enabled"))
             elif action == "always_on_top":
                 window.set_always_on_top(boolean(data.get("enabled"), "enabled"))
+            elif action == "view":
+                window.set_view_mode(data.get("mode"))
             elif action == "hide":
                 window.hide_sprite()
             elif action == "show":

@@ -65,9 +65,9 @@ export class HsinBehavior {
     }
   }
 
-  touch(part) {
+  touch(part,side=1) {
     if(!this.settings.touch_reactions || (this.lastTouch && this.time-this.lastTouch.time<0.45))return false;
-    this.lastTouch={part,time:this.time};this.touchState={part,start:this.time};this.forceBlink();return true;
+    this.lastTouch={part,time:this.time};this.touchState={part,start:this.time,side};this.forceBlink();return true;
   }
 
   advance(delta) {
@@ -132,6 +132,10 @@ export class HsinBehavior {
     this.rotate('頭',pitch*0.8,yaw*0.8,roll*0.8+(this.touchState?.part==='head'?0.07*this.touchWeight:0));
     this.rotate('上半身',this.breath*0.009+bodyY,bodyX,0);
     this.rotate('上半身2',this.breath*0.008,0,this.touchState?.part==='body'?0.025*this.touchWeight:0);
+    if(this.touchState?.part==='tail'&&!this.manualMotion){
+      this.rotate('頭',0,this.touchState.side*0.45*this.touchWeight,0);
+      this.rotate('首',0,this.touchState.side*0.12*this.touchWeight,0);
+    }
     // 手动动作、VMD、拖动与触摸优先，自动姿态不会改写它们。
     if(!this.manualMotion&&!this.activity.interacting&&!this.touchState) {
       const {thinking,speaking,listening}=this.activityWeights;
@@ -194,7 +198,8 @@ export class HsinBehavior {
       this.morph('たれ目',this.activityWeights.listening*0.14);
     }
     if(this.touchState) {
-      if(this.touchState.part==='tail'){this.morph('びっくり',this.touchWeight*0.3);this.morph('お',this.touchWeight*0.25);}
+      if(this.touchState.part==='chest'){this.morph('FaceRed',this.touchWeight*0.5);this.morph('照れ',this.touchWeight*0.6);this.morph('真面目',this.touchWeight*0.25);}
+      else if(this.touchState.part==='tail'){this.morph('びっくり',this.touchWeight*0.3);this.morph('お',this.touchWeight*0.25);}
       else {this.morph('にこり',this.touchWeight*0.5);this.morph('口角上げ左',this.touchWeight*0.4);this.morph('口角上げ右',this.touchWeight*0.4);}
     }
   }

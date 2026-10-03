@@ -27,6 +27,8 @@ from src.ui.fonts import ensure_fonts
 EXPRESSION_LABELS = {"normal": "平常", "happy": "开心", "sad": "难过", "angry": "生气", "surprised": "惊讶",
                      "wink": "眨单眼", "sleepy": "困倦", "relaxed": "放松", "blush": "脸红",
                      "content": "笑眯眯", "star_eyes": "星星眼", "heart_eyes": "爱心眼"}
+VIEW_MODES = {"full": "全身模式", "head_front": "大头模式 · 正面",
+              "head_left": "大头模式 · 左斜侧", "head_right": "大头模式 · 右斜侧"}
 
 
 class HsinSpriteWindow(QMainWindow):
@@ -41,6 +43,8 @@ class HsinSpriteWindow(QMainWindow):
         self._press_point = None
         self._dragged = False
         self._standing_size = None
+        self._full_size = (config["sprite"]["window"]["width"], config["sprite"]["window"]["height"])
+        self.view_mode = "full"
         self._current_background = "transparent"
         self.is_click_through = False
         self._always_on_top = config["sprite"]["window"]["always_on_top"]
@@ -136,6 +140,8 @@ class HsinSpriteWindow(QMainWindow):
             options["texture_overrides"] = {str(project_path(model["forms"][form])): mapping
                 for form, mapping in model.get("texture_overrides", {}).items() if form in model["forms"]}
             options["animation_config"] = self.config["sprite"].get("animation", {})
+            options["transition_files"] = {str(project_path(model["forms"][form])): motion
+                for form, motion in options["animation_config"].get("transitions", {}).items() if form in model["forms"]}
         self.sprite_view = view_type(project_path(path) if path else None, self.central_widget, **options)
         layout.addWidget(self.sprite_view)
         self.background_frame = BackgroundFrame(self.central_widget)
@@ -195,10 +201,21 @@ class HsinSpriteWindow(QMainWindow):
         for label, scale in (("80%", 0.8), ("100%", 1.0), ("125%", 1.25)):
             size_menu.addAction(label, lambda checked=False, s=scale: self._resize_scale(s))
         if self.sprite_view.renderer_name == "pmx":
+            view_menu = menu.addMenu("显示模式")
+            view_group = QActionGroup(view_menu)
+            view_group.setExclusive(True)
+            self._view_actions = {}
+            for mode, label in VIEW_MODES.items():
+                action = view_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(mode == self.view_mode)
+                view_group.addAction(action)
+                action.triggered.connect(lambda checked, key=mode: self.set_view_mode(key))
+                self._view_actions[mode] = action
             motions_menu = menu.addMenu("动作")
             self._motion_actions = {}
             for key, label in (("idle", "待机"), ("nod", "点头"), ("wave", "挥手"),
-                               ("peace", "V 手势"), ("finger_heart", "指尖比心"), ("crossed_arms", "交叉手臂"), ("side_lying", "侧躺（保持；选择待机恢复站立）")):
+                               ("peace", "V 手势"), ("finger_heart", "双手比心"), ("crossed_arms", "双手交叉（X 手势）"), ("side_lying", "躺下休息（选择待机起身）")):
                 action = motions_menu.addAction(label, lambda checked=False, group=key: self._play_motion(group))
                 action.setEnabled(False)
                 self._motion_actions[key] = action
@@ -460,23 +477,59 @@ class HsinSpriteWindow(QMainWindow):
         self.setWindowOpacity(opacity)
 
     def set_size(self, width, height):
+        # 接口传入实际画布尺寸；内部模式切换不会反复放大这个基准。
+        if self._standing_size is None:
+            self._full_size = (width if self.view_mode == "full" else max(1, round(width / 2.5)), height)
         self.setFixedSize(width, height)
         self.bubble_widget.reposition()
 
+    def _standing_canvas_size(self):
+        width, height = self._full_size
+        if self.view_mode != "full":
+            area = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+            width = min(area.width(), max(round(width * 2.5), round(height * 5 / 3)))
+            height = min(height, area.height())
+        return width, height
+
+    def _apply_canvas_size(self, width, height, *, floor_anchor=False):
+        # 加宽时尽量保留画布中心的位置，再把整个窗口限制在可用屏幕内。
+        offset_y = round((self.height() - height) * .95) if floor_anchor else (self.height() - height) // 2
+        position = self.pos() + QPoint((self.width() - width) // 2, offset_y)
+        self.setFixedSize(width, height)
+        self.move(position)
+        self._keep_on_screen()
+        self.bubble_widget.reposition()
+
+    def set_view_mode(self, mode, *, persist=True):
+        if not isinstance(mode, str) or mode not in VIEW_MODES:
+            raise ValueError("显示模式需要 full、head_front、head_left 或 head_right")
+        if self.sprite_view.renderer_name != "pmx":
+            raise ValueError("大头模式需要 PMX 渲染器")
+        self.view_mode = mode
+        if self._standing_size is None:
+            self._apply_canvas_size(*self._standing_canvas_size())
+        else:
+            self._standing_size = self._standing_canvas_size()
+        self.sprite_view.set_view_mode(mode)
+        for key, action in self._view_actions.items():
+            action.setChecked(key == mode)
+        if persist:
+            self.save_state()
+
     def _resize_scale(self, scale):
         window = self.config["sprite"]["window"]
-        width, height = int(window["width"] * scale), int(window["height"] * scale)
+        self._full_size = (int(window["width"] * scale), int(window["height"] * scale))
+        width, height = self._standing_canvas_size()
         if self._standing_size is not None:
             self._standing_size = (width, height)
-            width, height = self._side_window_size(width, height)
-        self.set_size(width, height)
-        self._keep_on_screen()
+            width, height = self._side_window_size(*self._full_size)
+        self._apply_canvas_size(width, height)
 
     def _side_window_size(self, width, height):
         area = (self.screen() or QApplication.primaryScreen()).availableGeometry()
         scale = min(width / 400, height / 600)
-        factor = min(scale, area.width() / 900, area.height() / 420)
-        return max(1, round(900 * factor)), max(1, round(420 * factor))
+        factor = min(scale, area.width() / 1000, area.height() / 600)
+        return max(1, round(1000 * factor)), max(1, round(600 * factor))
 
     def _keep_on_screen(self):
         area = (self.screen() or QApplication.primaryScreen()).availableGeometry()
@@ -484,14 +537,12 @@ class HsinSpriteWindow(QMainWindow):
                   max(area.top(), min(self.y(), area.bottom() + 1 - self.height())))
 
     def _fit_pose_window(self, motion):
-        if motion == "side_lying" and self._standing_size is None:
+        if motion in {"lie_down", "side_lying", "get_up"} and self._standing_size is None:
             self._standing_size = (self.width(), self.height())
-            self.set_size(*self._side_window_size(*self._standing_size))
-            self._keep_on_screen()
-        elif motion != "side_lying" and self._standing_size is not None:
-            size, self._standing_size = self._standing_size, None
-            self.set_size(*size)
-            self._keep_on_screen()
+            self._apply_canvas_size(*self._side_window_size(*self._full_size), floor_anchor=True)
+        elif motion not in {"lie_down", "side_lying", "get_up"} and self._standing_size is not None:
+            self._standing_size = None
+            self._apply_canvas_size(*self._standing_canvas_size(), floor_anchor=True)
 
     def position_bottom_right(self):
         screen = self.screen() or QApplication.primaryScreen()
@@ -540,7 +591,7 @@ class HsinSpriteWindow(QMainWindow):
             self._follow_action.setChecked(settings["mouse_follow"])
 
     def _touch_reaction(self, part):
-        names = {"head": "头部", "body": "身体", "hand": "手", "tail": "尾巴"}
+        names = {"head": "头部", "chest": "胸部", "body": "身体", "hand": "手", "tail": "尾巴"}
         self.touch_event.emit("tap", names.get(part, "身体"))
         if self.sprite_view._behavior_settings["touch_reactions"]:
             # 触摸不会替换正在回复的文字，或取消已经排队的对话语音。
@@ -656,7 +707,7 @@ class HsinSpriteWindow(QMainWindow):
 
     def _mood_touch(self, action, part):
         if action == "tap" and getattr(self.sprite_view, "_behavior_settings", {}).get("touch_reactions", True):
-            key = {"头部": "head", "身体": "body", "手": "hand", "尾巴": "tail"}.get(part)
+            key = {"头部": "head", "胸部": "chest", "身体": "body", "手": "hand", "尾巴": "tail"}.get(part)
             if key:
                 self.mood.interact("touch", key)
 
@@ -697,15 +748,21 @@ class HsinSpriteWindow(QMainWindow):
             return
         try:
             state = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("窗口状态格式无效")
+            mode = state.get("view_mode", "full")
+            if self.sprite_view.renderer_name == "pmx" and isinstance(mode, str) and mode in VIEW_MODES:
+                self.set_view_mode(mode, persist=False)
             point = QPoint(int(state["x"]), int(state["y"]))
             if any(screen.availableGeometry().contains(point + QPoint(40, 40)) for screen in QApplication.screens()):
                 self.move(point)
+                self._keep_on_screen()
         except (OSError, ValueError, TypeError, KeyError):
             pass
 
     def save_state(self):
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        state = {"x": self.x(), "y": self.y()}
+        state = {"x": self.x(), "y": self.y(), "view_mode": self.view_mode}
         temp = self._state_path.with_suffix(".tmp")
         temp.write_text(json.dumps(state), encoding="utf-8")
         temp.replace(self._state_path)

@@ -31,6 +31,9 @@ voice/**/configs/trained_voice.json
 鸣潮_*/
 # 用户提供的动作仅留在本机，保留来源与使用许可。
 *.fbx
+# 原始动作与按私有模型生成的校准产物保留本机，转换工具与来源说明入库。
+motions/cmu/
+motions/hsin/
 # 本机生成的训练配置与验证摘要不作为可迁移的源码分发。
 voice/**/configs/
 voice/**/validation.json

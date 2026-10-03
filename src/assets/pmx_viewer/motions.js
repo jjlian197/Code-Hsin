@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createCalibratedGestures } from './calibrated_gestures.js';
 
 function rotationTrack(name, times, angles) {
   if (times.length !== angles.length) throw new Error(`动作关键帧数量不一致：${name}`);
@@ -12,8 +13,9 @@ export function createBuiltinClips(mesh) {
   const track = (name, times, angles) => names.has(name) ? [rotationTrack(name, times, angles)] : [];
   const t = [0, 1, 2, 3, 4];
   const idle = new THREE.AnimationClip('idle', 4, [
-    ...track('右腕', t, t.map(v => [0, 0, 0.67 + Math.sin(v * Math.PI / 2) * 0.008])),
-    ...track('左腕', t, t.map(v => [0, 0, -0.67 - Math.sin(v * Math.PI / 2) * 0.008])),
+    // 手臂的底层旋转固定；呼吸由行为层处理，避免待机摆动让双手接触点漂移。
+    ...track('右腕', t, t.map(() => [0, 0, 0.67])),
+    ...track('左腕', t, t.map(() => [0, 0, -0.67])),
     ...track('右ひじ', t, t.map(() => [0, 0, 0])),
     ...track('右手首', t, t.map(() => [0, 0, 0])),
     ...track('左ひじ', t, t.map(() => [0, 0, 0])),
@@ -28,7 +30,7 @@ export function createBuiltinClips(mesh) {
     track('頭', [0, 0.3, 0.6, 0.9, 1.2, 1.6], [[0], [0.18], [-0.04], [0.15], [0.02], [0]]));
   const wave = createWaveClip(mesh);
   nod.blendMode = wave.blendMode = THREE.AdditiveAnimationBlendMode;
-  return { idle, nod, wave, ...createGestureClips(mesh) };
+  return { idle, nod, wave, ...createGestureClips(mesh), ...createCalibratedGestures(mesh) };
 }
 
 // 用真实手指方向建立掌面坐标系，避免把手腕某个欧拉轴误当作掌心方向。
@@ -141,17 +143,6 @@ function createGestureClips(mesh) {
     aim('右ひじ','右手首',new THREE.Vector3(0.12,1,0.15));
     setPalm('右',new THREE.Vector3(-0.08,1,0));
   };
-  const reachBones=(root,joint,end,target,hint)=>{
-    const s=position(root),e=position(joint),w=position(end);
-    const l1=s.distanceTo(e),l2=e.distanceTo(w),direction=target.clone().sub(s);
-    const distance=THREE.MathUtils.clamp(direction.length(),Math.abs(l1-l2)+0.05,l1+l2-0.05);
-    direction.normalize();const a=(l1*l1-l2*l2+distance*distance)/(2*distance);
-    const outside=hint.clone().sub(direction.clone().multiplyScalar(hint.dot(direction))).normalize();
-    const desired=s.clone().addScaledVector(direction,a).addScaledVector(outside,Math.sqrt(Math.max(0,l1*l1-a*a)));
-    aim(root,joint,desired.sub(s));
-    aim(joint,end,target.clone().sub(position(joint)));
-  };
-  const reach=(side,target,hint)=>reachBones(side+'腕',side+'ひじ',side+'手首',target,hint);
   try {
     bones.get('右腕').quaternion.setFromEuler(new THREE.Euler(0,0,0.67));
     bones.get('左腕').quaternion.setFromEuler(new THREE.Euler(0,0,-0.67));update();
@@ -180,23 +171,7 @@ function createGestureClips(mesh) {
           .multiply(bones.get(name).getWorldQuaternion(new THREE.Quaternion())));
       }
     });
-    const fingerHeart=clip('finger_heart',()=>{
-      raised();for(const finger of ['中','薬','小'])curl('右',finger,[0.85,1.05,0.7]);
-      aim('右人指１','右人指２',new THREE.Vector3(.6,.6,.45));
-      bend('右人指２','右人指３',.85);bend('右人指３','右人指先',.35);
-      // 拇指尖跨过食指第一节，保留前后距离，避免两指网格穿插。
-      const target=position('右人指２').add(new THREE.Vector3(-.10,.04,.18));
-      reachBones('右親指１','右親指２','右親指先',target,new THREE.Vector3(.8,0,.2));
-    });
-    const crossed=clip('crossed_arms',()=>{
-      const chest=position('上半身2');
-      reach('右',new THREE.Vector3(1.25,chest.y-0.15,2.25),new THREE.Vector3(-1.5,-1,0.8));
-      reach('左',new THREE.Vector3(-1.25,chest.y-0.7,2.65),new THREE.Vector3(1.5,-1,0.8));
-      curlNormal.set(0,0,-1);
-      setPalm('右',new THREE.Vector3(1,0,0),curlNormal);setPalm('左',new THREE.Vector3(-1,0,0),curlNormal);
-      for(const side of ['右','左'])for(const finger of ['人','中','薬','小'])curl(side,finger,[0.2,0.22,0.15]);
-    });
-    return {peace,finger_heart:fingerHeart,crossed_arms:crossed};
+    return {peace};
   } finally {
     initial.forEach((q,b)=>b.quaternion.copy(q));update();
   }

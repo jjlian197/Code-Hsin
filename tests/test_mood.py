@@ -13,6 +13,13 @@ from src.core.mood import MoodManager
 
 
 class MoodTest(unittest.TestCase):
+    def test_chest_touch_has_own_feedback_and_shares_touch_cooldown(self):
+        state = self.manager.interact("touch", "chest")
+        self.assertEqual(state["mood"], "shy")
+        self.assertEqual(state["affection"], 31)
+        state = self.manager.interact("touch", "head")
+        self.assertEqual(state["affection"], 31)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])

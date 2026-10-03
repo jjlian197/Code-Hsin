@@ -4,6 +4,9 @@ import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { createBuiltinClips, palmNormal } from './motions.js';
 import { HsinBehavior } from './behavior.js';
 import { loadLayingPose } from './laying_pose.js';
+import {blendFromCurrent} from './pose_transitions.js';
+import {setGroundSupport} from './ground_support.js';
+import {PoseCloth} from './pose_cloth.js';
 
 // 每个模型使用独立的 Ammo arena。切换时释放整个 arena 的引用，避免
 // 官方 MMDPhysics 缺少销毁接口导致刚体在同一 WASM heap 中累积。
@@ -34,10 +37,16 @@ export class AnimationRuntime {
     this.motionGeneration = 0;
     this.physics = objects.physics;
     this.activeAction = null;
+    this.gestureRelease = null;
     this.finishedAction = null;
     this.motion = 'idle';
     this.poseProfile = null;
     this.poseCache = new Map();
+    this.transitions=options.transitions||null;
+    this.poseCloth=this.transitions?new PoseCloth(mesh,this.transitions.floor):null;
+    this.transitionError=options.transition_error||null;
+    this.pendingCommand=null;
+    this.pendingSide=false;
     this.physicsEnabled = options.physics !== false;
     this.helper.enable('physics', this.physicsEnabled);
     this.frames = this.steps = this.elapsed = 0;
@@ -55,8 +64,22 @@ export class AnimationRuntime {
 
   play(group) {
     if (!(group in this.clips)) throw new Error('未知动作');
+    if(this.transitions&&this.poseProfile){this.requestStanding({group});return;}
+    const calibrated = name => name==='finger_heart'||name==='crossed_arms';
+    if(calibrated(group)&&this.motion===group&&this.activeAction?.isRunning())return;
     const leavingPose=!!this.poseProfile;
     this.behavior.prepareFrame();
+    // 手势中断时留下当前局部增量，短暂淡出；新动作从自身首帧进入，不先跳回待机。
+    const releaseNames=(calibrated(this.motion)||this.gestureRelease)?this.clips.finger_heart.tracks.map(t=>t.name):[];
+    const releaseTracks=releaseNames.map(name=>{
+      const boneName=name.match(/\.bones\[(.+)\]/)[1];
+      const index=this.mesh.skeleton.bones.findIndex(b=>b.name===boneName),bone=this.mesh.skeleton.bones[index];
+      const idleTrack=this.clips.idle.tracks.find(t=>t.name===name);
+      const base=idleTrack?new THREE.Quaternion().fromArray(idleTrack.values):this.bindPose[index].rotation.clone();
+      const delta=base.invert().multiply(bone.quaternion).normalize();
+      return new THREE.QuaternionKeyframeTrack(name,[0,.3],[...delta.toArray(),0,0,0,1]);
+    });
+    this.stopGestureRelease();
     this.restoreIdle();
     if (this.activeAction) this.activeAction.stop();
     this.motionGeneration++;
@@ -66,23 +89,36 @@ export class AnimationRuntime {
     this.poseProfile = null;
     this.helper.enable('ik',true);
     this.helper.enable('physics',this.physicsEnabled);
-    this.behavior.setMotionClip(null);
-    this.behavior.setManualMotion(group!=='idle');
     if (group !== 'idle') {
       this.activeAction = this.mixer.clipAction(this.clips[group]);
       this.activeAction.reset().setLoop(THREE.LoopOnce, 1).play();
     }
+    if(releaseTracks.length){
+      const releaseClip=new THREE.AnimationClip('gesture_release',.3,releaseTracks);
+      releaseClip.blendMode=THREE.AdditiveAnimationBlendMode;
+      this.gestureRelease=this.mixer.clipAction(releaseClip).setLoop(THREE.LoopOnce,1).play();
+    }
+    this.refreshMotionOwnership();
     if(leavingPose)this.restoreBindPose();
     this.evaluatePose();
     if(leavingPose)this.physics.reset();
   }
 
   async loadSideLying(url) {
+    if(this.transitionError)throw new Error(this.transitionError);
+    if(this.transitions){
+      this.pendingCommand=null;
+      if(this.motion==='get_up'){this.pendingSide=true;return;}
+      this.pendingSide=false;
+      if(this.motion==='lie_down'||this.motion==='side_lying')return;
+      this.startPoseAction('lie_down',true);return;
+    }
     const target=this.mesh,request=++this.motionGeneration;
     if(!this.poseCache.has(url))this.poseCache.set(url,loadLayingPose(url,target));
     let clip;
     try {clip=await this.poseCache.get(url);}catch(error){this.poseCache?.delete(url);if(this.mesh&&request===this.motionGeneration)throw error;return;}
     if(!this.mesh||request!==this.motionGeneration)return;
+    this.stopGestureRelease();
     const affected=new Set(clip.tracks.map(track=>track.name));
     const previousBase=this.baseAction,previousAction=this.activeAction;
     const cacheKey='side:'+url;
@@ -100,12 +136,74 @@ export class AnimationRuntime {
     this.physics.reset();
   }
 
+  requestStanding(command) {
+    this.pendingCommand=command;this.pendingSide=false;
+    if(this.motion==='side_lying')this.startPoseAction('get_up');
+    // 中途要求站立时完成当前支撑段，再播放独立起身；不倒放、不瞬移。
+  }
+
+  startPoseAction(name, enter=false) {
+    const continuing=!!this.poseProfile;
+    this.behavior.prepareFrame();this.stopGestureRelease();
+    let clip=this.transitions.clips[name];
+    if(enter)clip=blendFromCurrent(clip,this.mesh);
+    const affected=new Set(clip.tracks.map(t=>t.name));
+    const masked=new THREE.AnimationClip('idle:transition',4,this.clips.idle.tracks.filter(t=>!affected.has(t.name)));
+    const previousBase=this.baseAction,previousAction=this.activeAction;
+    this.baseAction=this.mixer.clipAction(masked).reset().play();
+    this.activeAction=this.mixer.clipAction(clip).reset().setLoop(name==='side_lying'?THREE.LoopRepeat:THREE.LoopOnce,name==='side_lying'?Infinity:1).play();
+    this.activeAction.clampWhenFinished=true;
+    if(previousBase!==this.baseAction)previousBase.stop();
+    if(previousAction&&previousAction!==this.activeAction)previousAction.stop();
+    // 动态起点与遮罩属于本次播放，切换后释放，避免重复往返积累 mixer 缓存。
+    if(this.poseTemporary){for(const c of this.poseTemporary)this.mixer.uncacheClip(c);}
+    this.poseTemporary=[masked,...(enter?[clip]:[])];
+    this.finishedAction=null;this.motionGeneration++;
+    this.motion=name;this.poseProfile=name==='side_lying'?'stable_side':'ground_transition';
+    this.helper.enable('ik',false);this.helper.enable('physics',false);
+    this.refreshMotionOwnership();setGroundSupport(this.mesh,this.transitions.floor,true);
+    this.evaluatePose();this.physics.reset();
+    if(!continuing)this.poseCloth?.reset();
+  }
+
+  finishPoseAction() {
+    if(this.motion==='lie_down'){
+      this.startPoseAction('side_lying');
+      if(this.pendingCommand)this.startPoseAction('get_up');
+      return;
+    }
+    const pending=this.pendingCommand||{group:'idle'},side=this.pendingSide;
+    this.pendingCommand=null;this.pendingSide=false;
+    this.poseProfile=null;setGroundSupport(this.mesh,this.transitions.floor,false);
+    this.poseCloth?.stop();
+    this.restoreIdle();this.activeAction.stop();this.activeAction=this.finishedAction=null;
+    if(this.poseTemporary){for(const c of this.poseTemporary)this.mixer.uncacheClip(c);this.poseTemporary=null;}
+    this.restoreBindPose();this.motion='idle';this.helper.enable('ik',true);
+    this.refreshMotionOwnership();this.evaluatePose();this.physics.reset();
+    if(side)this.startPoseAction('lie_down',true);
+    else if(pending.url)this.loadVmd(pending.url,pending.group).catch(error=>{this.asyncMotionError=String(error.message||error);});
+    else if(pending.group!=='idle')this.play(pending.group);
+  }
+
   restoreIdle() {
     if (this.baseAction.getClip() === this.clips.idle) return;
     const previous = this.baseAction;
     // 先激活新的待机绑定，再解除旧动作；共有骨骼不会暂时恢复 T pose。
     this.baseAction = this.mixer.clipAction(this.clips.idle).reset().play();
     previous.stop();
+  }
+
+  stopGestureRelease() {
+    if(!this.gestureRelease)return;
+    const clip=this.gestureRelease.getClip();
+    this.gestureRelease.stop();this.mixer.uncacheAction(clip,this.mesh);this.gestureRelease=null;
+  }
+
+  refreshMotionOwnership() {
+    const clip=this.activeAction?.getClip()||null;
+    this.behavior.setMotionClip(this.gestureRelease?new THREE.AnimationClip('gesture_owned',1,
+      [...(clip?.tracks||[]),...this.gestureRelease.getClip().tracks]):clip);
+    this.behavior.setManualMotion(this.motion!=='idle'||!!this.gestureRelease);
   }
 
   restoreBindPose() {
@@ -115,7 +213,16 @@ export class AnimationRuntime {
     this.mesh.skeleton.bones.forEach((bone,i)=>{
       bone.position.copy(this.bindPose[i].position);
       bone.quaternion.copy(this.bindPose[i].rotation);
-      if(backup){bone.position.toArray(backup,i*7);bone.quaternion.toArray(backup,i*7+3);}
+    });
+    // 常量待机轨道的 mixer 缓存可能仍是下垂姿势，手动归零后不会再次写入。
+    // 明确恢复当前待机值，绑定姿势仍保留给重定向使用。
+    for(const track of this.clips.idle.tracks){
+      const match=track.name.match(/^\.bones\[(.+)\]\.(quaternion|position)$/);
+      const bone=match&&this.mesh.skeleton.bones.find(b=>b.name===match[1]);
+      if(bone)bone[match[2]].fromArray(track.createInterpolant().evaluate(this.baseAction.time||0));
+    }
+    if(backup)this.mesh.skeleton.bones.forEach((bone,i)=>{
+      bone.position.toArray(backup,i*7);bone.quaternion.toArray(backup,i*7+3);
     });
   }
 
@@ -130,6 +237,7 @@ export class AnimationRuntime {
   }
 
   async loadVmd(url, name) {
+    if(this.transitions&&this.poseProfile){this.requestStanding({group:name,url});return;}
     const target = this.mesh;
     const request = ++this.motionGeneration;
     if (!this.vmdCache.has(url)) {
@@ -154,6 +262,7 @@ export class AnimationRuntime {
         this.clips.idle.tracks.filter(track => !affected.has(track.name))));
     }
     const idle = this.maskedIdleCache.get(url);
+    this.stopGestureRelease();
     const leavingPose=!!this.poseProfile;
     this.poseProfile=null;this.helper.enable('ik',true);
     const previousBase = this.baseAction, previousAction = this.activeAction;
@@ -177,7 +286,8 @@ export class AnimationRuntime {
   setPhysics(enabled) {
     this.physicsEnabled = enabled;
     this.helper.enable('physics', enabled && !this.poseProfile);
-    if (enabled) this.physics.reset();
+    if(this.poseProfile){this.poseCloth?.stop();}
+    else if (enabled) this.physics.reset();
   }
 
   resetPhysics() {
@@ -186,6 +296,7 @@ export class AnimationRuntime {
     this.behavior.prepareFrame();
     this.helper.update(0);
     this.physics.reset();
+    if(this.poseProfile)this.poseCloth?.reset();
     if(!this.poseProfile)this.physics.warmup(30);
     this.helper.enable('physics', enabled && !this.poseProfile);
   }
@@ -198,7 +309,12 @@ export class AnimationRuntime {
     // 物理仍限制步长；自然反应按实时时间结束，低帧率不延长口型与触摸。
     this.behavior.advance(realDelta);
     this.helper.update(delta);
+    if(this.gestureRelease&&!this.gestureRelease.isRunning()){
+      this.stopGestureRelease();this.refreshMotionOwnership();
+    }
     if (this.finishedAction === this.activeAction && this.finishedAction) {
+      if(this.transitions&&this.poseProfile){this.finishPoseAction();}
+      else {
       this.restoreIdle();
       this.activeAction.stop();
       this.activeAction = this.finishedAction = null;
@@ -206,15 +322,21 @@ export class AnimationRuntime {
       this.behavior.setMotionClip(null);
       this.behavior.setManualMotion(false);
       this.evaluatePose();
+      }
     }
     else {
       if(!this.physicsEnabled||this.poseProfile)this.behavior.applyBones();
       this.behavior.applyFace();
     }
     this.mesh.updateMatrixWorld(true);
+    if(this.poseProfile&&this.physicsEnabled&&this.poseCloth){
+      const remaining=this.motion==='get_up'?this.activeAction.getClip().duration-this.activeAction.time:1;
+      this.poseCloth.update(delta,THREE.MathUtils.smoothstep(remaining,0,.6));
+      this.mesh.updateMatrixWorld(true);
+    }
     this.frames++;
     this.elapsed += delta;
-    if (this.physicsEnabled && !this.poseProfile) this.steps++;
+    if (this.physicsEnabled) this.steps++;
   }
 
   snapshot() {
@@ -223,8 +345,14 @@ export class AnimationRuntime {
       motionAngle = Math.max(motionAngle, b.bone.quaternion.angleTo(this.restRotations[i]));
     });
     return { motion: this.motion, physics_enabled: this.physicsEnabled,
-      physics_active:this.physicsEnabled&&!this.poseProfile,pose_profile:this.poseProfile,
-      engine: 'Ammo/Bullet', rigid_bodies: this.physics.bodies.length,
+      posture_state:this.motion==='lie_down'||this.motion==='get_up'||this.motion==='side_lying'?this.motion:'standing',
+      transition_available:!!this.transitions,transition_error:this.transitionError,
+      transition_duration:this.poseProfile?this.activeAction?.getClip().duration:null,
+      queued_motion:this.pendingSide?'side_lying':this.pendingCommand?.group||null,
+      floor_y:this.transitions?.floor??null,motion_error:this.asyncMotionError||null,
+      physics_active:this.physicsEnabled&&(!this.poseProfile||!!this.poseCloth),pose_profile:this.poseProfile,
+      cloth:this.poseCloth?.snapshot()||null,
+      engine: this.poseProfile&&this.physicsEnabled?'骨骼布料/PBD':'Ammo/Bullet', rigid_bodies: this.physics.bodies.length,
       constraints: this.physics.constraints.length, dynamic_bones: this.dynamicBodies.length,
       frames: this.frames, physics_steps: this.steps, dynamic_bone_angle: motionAngle,
       motion_time: this.activeAction?.time || 0, animation_time: this.elapsed,
@@ -243,6 +371,7 @@ export class AnimationRuntime {
   }
 
   dispose() {
+    this.stopGestureRelease();
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.mesh);
     this.helper.remove(this.mesh);
@@ -253,6 +382,7 @@ export class AnimationRuntime {
     this.poseCache.clear();this.poseCache=null;
     this.maskedIdleCache.clear(); this.maskedIdleCache = null;
     this.behavior = null;
+    this.poseCloth=null;
     window.Ammo = null;
   }
 }

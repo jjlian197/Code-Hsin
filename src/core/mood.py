@@ -17,7 +17,7 @@ TIERS = ((0, "相识", ("normal", "relaxed", "surprised", "sad", "sleepy")),
          (30, "相伴", ("happy",)), (60, "信赖", ("blush", "content")),
          (80, "心意相通", ("heart_eyes",)))
 REWARDS = {"touch": (1, 15), "chat": (2, 60), "focus": (3, 60)}
-EVENT_LABELS = {"head": "轻触头部", "body": "轻触身体", "hand": "轻触手部", "tail": "轻触尾巴",
+EVENT_LABELS = {"head": "轻触头部", "chest": "轻触胸部", "body": "轻触身体", "hand": "轻触手部", "tail": "轻触尾巴",
                 "chat": "完成对话", "focus": "完成专注"}
 DAILY_LIMIT = 20
 
@@ -106,7 +106,7 @@ class MoodManager(QObject):
         return self.snapshot()
 
     def interact(self, event, part=None):
-        if event not in REWARDS or (event == "touch" and part not in {"head", "body", "hand", "tail"}):
+        if event not in REWARDS or (event == "touch" and part not in {"head", "chest", "body", "hand", "tail"}):
             raise ValueError("未知互动")
         now = self.clock()
         self.last_interaction = now
@@ -130,7 +130,7 @@ class MoodManager(QObject):
                 pass  # 保存错误可在菜单/面板查看，触摸或聊天继续正常工作。
         tier = self.snapshot()["tier_index"]
         if event == "touch":
-            self.mood = "surprised" if part == "tail" else ("fond" if tier >= 3 and part == "hand" else "shy" if tier >= 2 and part == "head" else "relaxed")
+            self.mood = "shy" if part == "chest" else "surprised" if part == "tail" else ("fond" if tier >= 3 and part == "hand" else "shy" if tier >= 2 and part == "head" else "relaxed")
         else:
             self.mood = "content" if event == "chat" and tier >= 2 else "happy" if event == "chat" and tier >= 1 else "relaxed"
         self.until = now + (12 if self.mood == "surprised" else 45)
