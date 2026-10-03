@@ -5,12 +5,15 @@
     "src/core/sprite_window.py": "6c0c245bce6513bd3a59cadd0924ae6fc42576173d44b956116426ae1db507a5",
     "src/ui/bubble_widget.py": "2393d3a4464c147405c6ae9ab06551d2d679f1b70a02b255483cc5d72204ac15",
     "src/core/websocket_server.py": "6f6fa9f2b9a992f460b910b4e3ae0d0723d7fa2136a02aff4fe7464203108b2f",
-    "src/core/http_server.py": "add620b925d96a0cc9865c058bf5c2fcdaa6a3ef69421404240ecebb26cd13c8"
+    "src/core/http_server.py": "add620b925d96a0cc9865c058bf5c2fcdaa6a3ef69421404240ecebb26cd13c8",
+    "src/ui/pomodoro_overlay.py": "80e3f9d1292572ac862cebb52893c5e1fb8974595f945eaf655e390ee4383d57",
+    "src/ui/assistant_panel.py": "15aa84cbfcbf148f8aa45cb9a106e19c9f5403ab3548f43b82c23e6f69ba1545"
   },
   "reuse": {
     "background_frame": "class extracted unchanged",
     "bubble_widget": "copied then adapted",
     "sprite_window": "window flags, tray actions and pointer-drag logic adapted",
-    "control_api": "JSON envelopes and routes retained; Qt thread handoff unified"
+    "control_api": "JSON envelopes and routes retained; Qt thread handoff unified",
+    "pomodoro": "timer-panel behavior and transparent head badge adapted; independent service and PMX head projection implemented locally (source hashes checked 2026-10-03)"
   }
 }

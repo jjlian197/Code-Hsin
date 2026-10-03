@@ -125,7 +125,9 @@ function interactionLayout(){
   const head=mesh?.skeleton.bones.find(b=>b.name==='頭');
   if(!head)return {face:{x:0.5,y:0.22}};
   const position=head.getWorldPosition(new THREE.Vector3());position.y+=0.4;position.project(camera);
-  return {face:{x:(position.x+1)/2,y:(1-position.y)/2}};
+  // 头顶徽标留出狐耳高度，随头部转动与相机缩放一起投影。
+  const top=head.getWorldPosition(new THREE.Vector3());top.y+=3.4;top.project(camera);
+  return {face:{x:(position.x+1)/2,y:(1-position.y)/2},head_top:{x:(top.x+1)/2,y:(1-top.y)/2}};
 }
 const raycaster=new THREE.Raycaster();
 function touchAt(x,y){

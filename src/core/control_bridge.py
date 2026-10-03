@@ -130,14 +130,33 @@ class ControlBridge(QObject):
                                    "error": getattr(view, "load_error", None),
                                    "info": getattr(view, "model_info", {})},
                       "tts": window.tts.snapshot(), "audio": window.voice_player.snapshot(), "chat": window.chat.snapshot(), "stt": window.stt.snapshot(),
+                      "pomodoro": window.pomodoro.snapshot(),
                       "voice_dataset_available": project_path(window.config["voice"]["manifest"]).is_file(),
-                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config"]}
+                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro"]}
             if view.renderer_name == "pmx":
                 status["capabilities"].append("model")
             if view.model_loaded:
                 status["capabilities"].extend(["expression", "motion", "physics", "look_at", "parameter", "parameter_batch", "behavior", "blink", "lip_sync", "audio"])
                 status["available_parameters"] = {key: list(limits) for key, limits in PARAMETER_RANGES.items()}
             return self.success("status", status)
+        if kind == "pomodoro":
+            action = data.get("action", "status")
+            allowed = {"action"} | ({"phase"} if action == "start" else set(window.pomodoro.settings) if action == "configure" else set())
+            if set(data) - allowed:
+                raise CommandError("未知番茄钟参数")
+            if action == "status":
+                window.pomodoro.tick()
+            elif action == "configure":
+                window.pomodoro.configure(**{key: value for key, value in data.items() if key != "action"})
+            elif action == "start":
+                window.pomodoro.start(data.get("phase"))
+            elif action in {"pause", "resume", "reset"}:
+                getattr(window.pomodoro, action)()
+            elif action == "open":
+                window.open_pomodoro()
+            else:
+                raise CommandError("pomodoro.action 需要 status、configure、start、pause、resume、reset 或 open")
+            return self.success("pomodoro_status", window.pomodoro.snapshot())
         if kind == "model":
             if window.sprite_view.renderer_name != "pmx":
                 raise CommandError("需要 PMX 渲染器", "renderer_unavailable")

@@ -58,6 +58,46 @@ class QtWindowTestCase(unittest.TestCase):
             time.sleep(0.003)
 
 class DesktopTest(QtWindowTestCase):
+    def test_pomodoro_survives_panel_close_sprite_hide_and_click_through(self):
+        from unittest.mock import patch
+        now = [100.0]
+        manager = self.window.pomodoro
+        manager.clock = lambda: now[0]
+        manager.configure(sound=False)
+        self.window.open_pomodoro()
+        dialog = self.window.pomodoro_dialog
+        dialog.start_button.click()
+        self.assertTrue(self.window.pomodoro_overlay.isVisible())
+        self.window.set_click_through(True)
+        self.assertFalse(dialog.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        self.window.hide_sprite()
+        self.app.processEvents()
+        self.assertFalse(self.window.pomodoro_overlay.isVisible())
+        self.assertTrue(dialog.isVisible(), "独立面板不随隐藏角色消失")
+        dialog.close()
+        now[0] += 30
+        manager.tick()
+        self.assertEqual(manager.snapshot()["remaining_seconds"], 1470)
+        self.window.show_sprite()
+        self.app.processEvents()
+        self.assertTrue(self.window.pomodoro_overlay.isVisible())
+        self.window.open_pomodoro()
+        dialog.pause_button.click()
+        self.assertEqual(manager.state, "paused")
+        self.assertIn("已暂停", self.window.pomodoro_overlay.text())
+        self.window.hide_sprite()
+        notifications = []
+        manager.finished.connect(notifications.append)
+        dialog.pause_button.click()
+        now[0] += 1470
+        with patch.object(self.window, "show_message") as bubble:
+            manager.tick()
+            manager.tick()
+            bubble.assert_not_called()
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(dialog.start_button.text(), "开始短休息")
+        self.assertFalse(self.window.pomodoro_overlay.isVisible())
+
     def test_stream_starts_before_final_and_dialog_can_stop_queued_speech(self):
         from unittest.mock import patch
         from PyQt6.QtMultimedia import QMediaPlayer
@@ -304,6 +344,28 @@ class APITest(QtWindowTestCase):
         self.window.touch_event.emit("tap", "身体")
         result = future.result(timeout=3)
         self.assertEqual(result, {"type": "touch_event", "data": {"action": "tap", "part": "身体"}})
+
+    def test_pomodoro_http_settings_and_websocket_controls(self):
+        async def client():
+            url = self.services.endpoints()["http"]
+            async with ClientSession() as session:
+                async with session.post(url + "/api/pomodoro", json={"action": "configure", "focus_minutes": 1, "sound": False}) as r:
+                    self.assertEqual(r.status, 200)
+                async with session.post(url + "/api/pomodoro", json={"action": "configure", "focus_minutes": 10, "sound": 1}) as r:
+                    self.assertEqual(r.status, 400)
+                async with session.post(url + "/api/pomodoro", json={"action": "start"}) as r:
+                    self.assertEqual((await r.json())["data"]["remaining_seconds"], 60)
+            async with websockets.connect(self.services.endpoints()["websocket"]) as ws:
+                for action, expected in (("pause", "paused"), ("resume", "running"), ("reset", "idle")):
+                    await ws.send(json.dumps({"type": "pomodoro", "data": {"action": action}}))
+                    result = json.loads(await ws.recv())
+                    self.assertTrue(result["success"])
+                    self.assertEqual(result["data"]["state"], expected)
+                await ws.send(json.dumps({"type": "get_status"}))
+                result = json.loads(await ws.recv())
+                self.assertIn("pomodoro", result["data"]["capabilities"])
+                self.assertEqual(result["data"]["pomodoro"]["settings"]["focus_minutes"], 1)
+        self.network(client())
 
     def test_stt_http_settings_and_invalid_batch(self):
         from unittest.mock import patch

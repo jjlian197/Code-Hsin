@@ -15,10 +15,12 @@ from src.core.tts_manager import TTSManager
 from src.core.stt_manager import STTManager
 from src.core.voice_phrases import TOUCH_REPLIES, PREVIEW_PHRASES
 from src.core.chat_manager import ChatManager
+from src.core.pomodoro import PomodoroManager
 from src.core.chat_backends import PROVIDERS
 from src.ui.app_icon import create_icon
 from src.ui.background_frame import BackgroundFrame
 from src.ui.bubble_widget import BubbleWidget
+from src.ui.pomodoro_overlay import PomodoroOverlay
 from src.ui.fonts import ensure_fonts
 
 EXPRESSION_LABELS = {"normal": "平常", "happy": "开心", "sad": "难过", "angry": "生气", "surprised": "惊讶",
@@ -50,6 +52,10 @@ class HsinSpriteWindow(QMainWindow):
         self._top_action.triggered.connect(self.set_always_on_top)
         self._setup_window()
         self._setup_ui()
+        self.pomodoro = PomodoroManager(self._state_path.with_name("pomodoro.json"), self)
+        self.pomodoro_dialog = None
+        self.pomodoro_overlay = PomodoroOverlay(self)
+        self.pomodoro.finished.connect(self._pomodoro_finished)
         self.voice_player = LocalVoicePlayer(self)
         self.tts = TTSManager(config, self.voice_player, self)
         self.chat = ChatManager(config, self)
@@ -147,6 +153,7 @@ class HsinSpriteWindow(QMainWindow):
         menu.addAction("隐藏心", self.hide_sprite)
         menu.addAction("回到屏幕右下角", self.position_bottom_right)
         menu.addAction("和心聊天…", self.open_chat)
+        menu.addAction("番茄钟…", self.open_pomodoro)
         backend_menu = menu.addMenu("对话后端")
         backend_group = QActionGroup(backend_menu)
         backend_group.setExclusive(True)
@@ -576,6 +583,20 @@ class HsinSpriteWindow(QMainWindow):
         if not self._pointer_event(event):
             super().mouseReleaseEvent(event)
 
+    def open_pomodoro(self):
+        if self.pomodoro_dialog is None:
+            from src.ui.pomodoro_dialog import PomodoroDialog
+            self.pomodoro_dialog = PomodoroDialog(self)
+        self.pomodoro_dialog.open_near(self)
+
+    def _pomodoro_finished(self, message):
+        if self.isVisible():
+            self.show_message(message, 10000)
+        if self.tray_icon:
+            self.tray_icon.showMessage("心 · 番茄钟", message, QSystemTrayIcon.MessageIcon.Information, 10000)
+        if self.pomodoro.settings["sound"]:
+            QApplication.beep()
+
     def moveEvent(self, event):
         super().moveEvent(event)
         if hasattr(self, "bubble_widget") and self.bubble_widget.isVisible():
@@ -602,6 +623,11 @@ class HsinSpriteWindow(QMainWindow):
 
     def cleanup(self):
         self.save_state()
+        self.pomodoro.close()
+        self.pomodoro_overlay.cleanup()
+        if self.pomodoro_dialog:
+            self.pomodoro_dialog.close()
+            self.pomodoro_dialog.deleteLater()
         self.bubble_widget.hide_timer.stop()
         self.bubble_widget.close()
         self.stt.close()
