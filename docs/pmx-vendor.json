@@ -52,7 +52,7 @@
     },
     {
       "path": "src/assets/pmx_viewer/lib/three/three.module.js",
-      "sha256": "61718c7d4f2c65be011b954f51661079fbd3fa9839380cce38cf71c06153eddb"
+      "sha256": "5916c8dfb5f4e3eede312de305345868d4a0a8105383b080c6985565d6e79b46"
     },
     {
       "path": "src/assets/pmx_viewer/lib/three/addons/curves/NURBSCurve.js",
@@ -76,5 +76,6 @@
     }
   ],
   "fflate_version": "0.8.2",
-  "fflate_source": "https://github.com/101arrowz/fflate/tree/v0.8.2"
+  "fflate_source": "https://github.com/101arrowz/fflate/tree/v0.8.2",
+  "hash_format": "SHA-256 of LF-normalized Git content"
 }
