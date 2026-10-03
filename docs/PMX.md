@@ -4,6 +4,8 @@
 
 Three.js 固定 r165，与参考项目原来的渲染库一致。核心文件取自本地参考项目；MMDLoader、MMDAnimationHelper、CCDIKSolver、MMDPhysics、TGALoader、MMDToonShader、mmdparser.module.js 和 Ammo WASM 来自 [Three.js 官方 r165](https://github.com/mrdoob/three.js/tree/r165/examples/jsm)。第三方文件保持原样，许可证保存在 `lib/three/LICENSE`、`lib/three/addons/libs/LICENSE.mmd-parser` 和 `LICENSE.ammo`。文件摘要见 `pmx-vendor.json`。
 
+FBX 定格侧躺复用同版本 FBXLoader、NURBSCurve、NURBSUtils 和 fflate 0.8.2，本机取自参考项目的 Three.js r165 文件，第三方源码未修改。fflate 的官方 MIT 声明保存在 `lib/three/addons/libs/LICENSE.fflate`，来源为 [fflate v0.8.2](https://github.com/101arrowz/fflate/blob/v0.8.2/LICENSE)，文件摘要同样记录在 `pmx-vendor.json`。侧躺姿势与衣发限制见 [动作说明](ANIMATION.md#本地侧躺-fbx)。
+
 ## 本地模型
 
 模型：鸣潮/白泽。保留原文件夹及 Readme，不转换、不改写、不对外配布。二阶段的 `Fur_Ear` 材质引用缺失的 `textures/Tail_EX.png`；`config.yaml` 的 `texture_overrides` 将其映射到一阶段同名原贴图。未配置的缺失贴图会明确报错。

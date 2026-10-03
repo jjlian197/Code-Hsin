@@ -55,6 +55,26 @@ Qt 用 33 毫秒计时器推进帧，不依赖网页是否有焦点；前一帧�
 
 V 手势已接入。指尖比心与双手交叉目前为初版：用户确认和 Aemeath 原版相差较大，后续需要细化肩肘位置、掌面朝向、指尖关系与整体姿态，两个形态均需重新视觉验收。现有自动验证仅覆盖播放、恢复与物理开关。当前仍使用模型原有衣服刚体，抬臂时袖子可能被带起；大幅伸展、蹲下及复杂衣服自碰撞留待单独适配。
 
+## 本地侧躺 FBX
+
+将用户提供的 `Female Laying Pose (1).fbx` 放在项目根目录，右键或托盘“动作 → 侧躺（保持；选择待机恢复站立）”即可使用。文件存在时才启用该项；也可通过 `sprite.animation.side_lying` 配置其他本地路径。该文件仅保留在本机，源码仓库不分发用户动作资源。
+
+此 FBX 是 Mixamo 的约一帧定格姿势。`laying_pose.js` 重映射到两个心的 PMX，修正 T/A 绑定姿态差异，保留侧身、撑头和另一只手靠近腰部的姿势；为适配长裙，将原动作深屈膝改成较浅屈膝、双腿顺裙摆叠放。因此是服装适配后的侧躺版，并非原动作逐关节完全复制。
+
+侧躺成功后窗口自动加宽（默认 900×420，按原缩放及可用屏幕限制），镜头按当前蒙皮的完整包围盒取景；耳朵、头发、裙摆和脚尖留有余量。选择待机或其他动作、切换形态后恢复站立取景和窗口尺寸。侧躺保持到手动退出，重复选择仍保持；隐藏后暂停、显示后继续。
+
+为稳定长衣摆，侧躺期间关闭站立脚部 IK，并将衣发动态骨骼固定到模型绑定姿态，暂停 Ammo 衣发模拟。原来的物理开关偏好仍被保留，重置或开启物理不会让侧躺衣服突然甩动；退出后恢复 IK 和用户选择的物理状态。眼神、眨眼、触摸微笑与口型继续可用；撑头和身体骨骼由固定姿势占用，不叠加转头、呼吸或对话手势。
+
+通过两形态原生截图检查，调整后未见明显的屈膝顶裙、脸部被头发遮挡或大面积互穿；这是一项固定视角、固定服装姿态的适配，不是完整布料自碰撞。头发/裙摆接地、姿势平滑过渡与侧躺动态物理留待后续细化。原模型的开衩和分片衣摆继续保留。
+
+接口调用：
+
+```json
+{"type":"motion","data":{"group":"side_lying","index":0}}
+```
+
+异步返回 `motion_loading` 后查询 `renderer.info.runtime.motion`，实际进入后为 `side_lying`、`pose_profile: stable_side`、`physics_active: false`；解析错误记录于 `motion_error`。恢复使用 `group: idle`。`python -m tools.verify_side_lying` 检查双形态、四种窗口比例、全模型边界、长时间保持、重复选择、隐藏/恢复、物理重置与偏好恢复、摸头、口型、后发动作取消加载和切换形态，报告位于 `.runtime/side-lying-validation.json`。
+
 ## 本地 VMD
 
 在 `config.local.yaml` 配置现有本地动作文件。例如：
@@ -67,7 +87,7 @@ sprite:
         - motions/my-dance.vmd
 ```
 
-路径以项目根目录为基准，也支持绝对路径。动作组不能占用 idle、nod、wave、tap、peace、finger_heart、crossed_arms 名称。重启后通过控制接口调用：
+路径以项目根目录为基准，也支持绝对路径。动作组不能占用 idle、nod、wave、tap、peace、finger_heart、crossed_arms、side_lying 名称。重启后通过控制接口调用：
 
 ```json
 {"type":"motion","data":{"group":"dance","index":0}}
@@ -83,9 +103,11 @@ sprite:
 python -m unittest discover -s tests -v
 node tests/test_motion_clips.mjs
 node --loader ./tools/node_three_loader.mjs tests/test_behavior.mjs
+node --loader ./tools/node_three_loader.mjs tests/test_side_lying.mjs
 python -m tools.verify_pmx
 python -m tools.verify_behavior
 python -m tools.verify_companion
+python -m tools.verify_side_lying
 ```
 
 检查实际透明背景、脸部不透明、基础骨骼动作、动作结束、物理步数和骨骼变化、关闭后步数停止、重新开启与复位、异步 VMD、双形态切换和背景合成。预览与记录位于 `.runtime/`。

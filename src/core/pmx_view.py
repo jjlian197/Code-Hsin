@@ -44,6 +44,7 @@ class PmxPage(QWebEnginePage):
 class PmxView(QWidget):
     renderer_name = "pmx"
     load_finished = pyqtSignal(bool)
+    pose_changed = pyqtSignal(str)
 
     def __init__(self, model_path, parent=None, texture_overrides=None, animation_config=None):
         super().__init__(parent)
@@ -55,6 +56,7 @@ class PmxView(QWidget):
         self._ready = False
         self._closed = False
         self._request_id = 0
+        self._pose_motion = "idle"
         self._texture_overrides = texture_overrides or {}
         self._animation_config = animation_config or {}
         self._physics_enabled = self._animation_config.get("physics", True)
@@ -146,6 +148,9 @@ class PmxView(QWidget):
             raise ValueError("需要存在的本地 PMX 模型")
         self.model_path = path
         self.model_loaded = False
+        if self._pose_motion != "idle":
+            self._pose_motion = "idle"
+            self.pose_changed.emit("idle")
         self.frame_timer.stop()
         self.model_info = {}
         self.load_error = None
@@ -204,7 +209,12 @@ class PmxView(QWidget):
     def get_available_motions(self):
         if not self.model_loaded:
             return []
-        return self.model_info.get("motions", []) + list(self._animation_config.get("vmd", {}))
+        path = self._laying_path()
+        poses = ["side_lying"] if path.is_file() and path.suffix.lower() == ".fbx" else []
+        return self.model_info.get("motions", []) + poses + [name for name in self._animation_config.get("vmd", {}) if name != "side_lying"]
+
+    def _laying_path(self):
+        return project_path(self._animation_config.get("side_lying", "Female Laying Pose (1).fbx"))
 
     def trigger_motion(self, group, index=0):
         if group == "tap":
@@ -212,7 +222,11 @@ class PmxView(QWidget):
         if group not in self.get_available_motions():
             raise ValueError("未知动作")
         url = None
-        files = self._animation_config.get("vmd", {}).get(group)
+        if group == "side_lying":
+            if index != 0 or self._laying_path().suffix.lower() != ".fbx":
+                raise ValueError("侧躺需要本地 FBX 文件且 index=0")
+            url = QUrl.fromLocalFile(str(self._laying_path())).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+        files = self._animation_config.get("vmd", {}).get(group) if group != "side_lying" else None
         if files is not None:
             if not isinstance(files, list) or not 0 <= index < len(files):
                 raise ValueError("动作 index 超出范围")
@@ -285,11 +299,15 @@ class PmxView(QWidget):
     def _runtime_status(self, details):
         if self.model_loaded and not self._closed:
             self.model_info["runtime"] = json.loads(details)
+            motion = self.model_info["runtime"].get("motion", "idle")
+            if motion != self._pose_motion:
+                self._pose_motion = motion
+                self.pose_changed.emit(motion)
 
     def _motion_error(self, details):
         if not self._closed:
             self.model_info["motion_error"] = details
-            logger.error("VMD 动作加载失败：{}", details)
+            logger.error("动作加载失败：{}", details)
 
     def hideEvent(self, event):
         super().hideEvent(event)

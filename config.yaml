@@ -4,6 +4,8 @@ sprite:
   renderer: pmx
   animation:
     physics: true
+    # 用户本地动作，不随源码分发；存在时显示“侧躺”菜单。
+    side_lying: Female Laying Pose (1).fbx
     behavior:
       auto_blink: true
       breathing: true

@@ -4,7 +4,7 @@ import { configureMaterials } from './materials.js';
 import { AnimationRuntime, createPhysicsModule } from './animation_runtime.js';
 import { expressions, behaviorMorphNames } from './behavior.js';
 
-let bridge, mesh, frameBounds, runtime, generation=0, stopped=false;
+let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
 const scene=new THREE.Scene();
 const camera=new THREE.OrthographicCamera(-10,10,15,-15,0.1,200);
 const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true,preserveDrawingBuffer:true});
@@ -53,6 +53,21 @@ function resize(){
   render();
 }
 addEventListener('resize',resize);
+function fitCurrentPose(){
+  if(!mesh)return;
+  mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
+  frameBounds=mesh.boundingBox.clone();resize();
+}
+function framing(){
+  if(!mesh)return null;
+  mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
+  const box=mesh.boundingBox,points=[];
+  for(const x of [box.min.x,box.max.x])for(const y of [box.min.y,box.max.y])for(const z of [box.min.z,box.max.z])
+    points.push(new THREE.Vector3(x,y,z).applyMatrix4(mesh.matrixWorld).project(camera));
+  return {fully_visible:points.every(p=>[p.x,p.y,p.z].every(Number.isFinite)&&Math.abs(p.x)<=1&&Math.abs(p.y)<=1&&Math.abs(p.z)<=1),
+    left:Math.min(...points.map(p=>(p.x+1)/2)),right:Math.max(...points.map(p=>(p.x+1)/2)),
+    top:Math.min(...points.map(p=>(1-p.y)/2)),bottom:Math.max(...points.map(p=>(1-p.y)/2)),width:innerWidth,height:innerHeight};
+}
 function dispose(model){
   if(!model)return;
   if(runtime?.mesh===model){runtime.dispose();runtime=null;}
@@ -101,6 +116,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     candidate.skeleton.update();
     candidate.computeBoundingBox();
     frameBounds=candidate.boundingBox.clone();
+    standingBounds=frameBounds.clone();
     mesh=candidate;scene.add(mesh);resize();
     const supported=Object.keys(expressions).filter(name=>name==='normal'||
       Object.keys(expressions[name]).every(m=>m in mesh.morphTargetDictionary));
@@ -139,7 +155,7 @@ function touchAt(x,y){
   const world=name=>mesh.skeleton.bones.find(b=>b.name===name)?.getWorldPosition(new THREE.Vector3());
   const head=world('頭'),neck=world('首'),hands=[world('右手首'),world('左手首')].filter(Boolean);
   let part='body';
-  if(head&&neck&&hit.point.y>neck.y&&Math.abs(hit.point.x-head.x)<1.6)part='head';
+  if(head&&neck&&(runtime.poseProfile?head.distanceTo(hit.point)<2.2:hit.point.y>neck.y&&Math.abs(hit.point.x-head.x)<1.6))part='head';
   else if(hands.some(p=>p.distanceTo(hit.point)<1.2))part='hand';
   else if(hit.face){
     const indices=mesh.geometry.attributes.skinIndex,weights=mesh.geometry.attributes.skinWeight;
@@ -155,11 +171,15 @@ function touchAt(x,y){
 }
 function playMotion(name,url=null){
   if(!runtime)return false;
-  if(url){
+  if(name==='side_lying'&&url){
     const active=runtime;
-    active.loadVmd(url,name).then(()=>{if(active===runtime)reportRuntime();})
+    active.loadSideLying(url).then(()=>{if(active===runtime&&active.motion==='side_lying'){fitCurrentPose();reportRuntime();}})
+      .catch(error=>{if(active===runtime)bridge.motionError(String(error.message||error));});
+  }else if(url){
+    const active=runtime;
+    active.loadVmd(url,name).then(()=>{if(active===runtime&&!active.poseProfile){frameBounds=standingBounds.clone();resize();reportRuntime();}})
       .catch(error=>{console.error(error);if(active===runtime)bridge.motionError(String(error.message||error));});
-  }else{runtime.play(name);reportRuntime();}
+  }else{runtime.play(name);frameBounds=standingBounds.clone();resize();reportRuntime();}
   return true;
 }
 window.HsinPmx={loadModel,setExpression,playMotion,
@@ -179,6 +199,7 @@ window.HsinPmx={loadModel,setExpression,playMotion,
   resetPhysics:()=>{if(runtime){runtime.resetPhysics();reportRuntime();}},
   setPaused:paused=>{if(runtime){runtime.paused=paused;runtime.behavior.suspend();lastFrame=0;reportRuntime();}},
   snapshot:()=>runtime?.snapshot(),
+  framing,
   dispose:()=>{stopped=true;generation++;dispose(mesh);mesh=null;renderer.dispose();}};
 new QWebChannel(qt.webChannelTransport,channel=>{bridge=channel.objects.pmxBridge;bridge.viewerReady();});
 resize();

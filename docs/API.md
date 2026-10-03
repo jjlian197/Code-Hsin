@@ -65,7 +65,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 `look_at` 持续保持目标，手动注视不受自动鼠标开关限制。发送 `behavior` 中的 `mouse_follow: true` 或 `reset_parameters: true` 可清除固定注视，恢复鼠标采样。`renderer.info.runtime.behavior` 提供实际眼神、眨眼、口型、呼吸、表情权重与最后一次触摸；`audio` 状态提供解码错误、实际音频缓冲数量和播放进度。
 
-基础动作返回 `motion_set`，外部 VMD 返回 `motion_loading`，物理控制返回 `physics_updated`。查询 `renderer.info.runtime` 可得到实际动作、物理开关、步数、刚体/关节数量和骨骼变化；VMD 加载错误位于 `renderer.info.motion_error`。`available_motions` 包含基础动作和已配置的外部动作组。JSON 成功响应说明指令已交给渲染器，异步 VMD 需查询状态确认。
+基础动作返回 `motion_set`，外部 VMD 和本地侧躺 FBX 返回 `motion_loading`，物理控制返回 `physics_updated`。查询 `renderer.info.runtime` 可得到实际动作、物理偏好 `physics_enabled`、实际模拟状态 `physics_active`、步数、刚体/关节数量和骨骼变化；异步动作加载错误位于 `renderer.info.motion_error`。`available_motions` 包含基础动作和已配置的外部动作组，本地 FBX 存在时额外包含 `side_lying`。该姿势保持到手动退出，`pose_profile: stable_side` 时暂停衣发物理；发送 `motion` 的 `group: idle` 恢复站立和原物理偏好。JSON 成功响应说明指令已交给渲染器，异步动作需查询状态确认。详情见 [侧躺说明](ANIMATION.md#本地侧躺-fbx)。
 
 `renderer.info.runtime.behavior.activity` 提供 `idle/thinking/speaking/listening` 和拖动占用状态，`activity_weights` 提供平滑姿态权重，`manual_motion` 标记主动动作，`idle_action` 提供当前环顾或伸展。对话状态由聊天、合成、识别与实际音频播放共同驱动；关闭 `conversation_actions` 只关闭姿态，口型继续工作。`random_idle` 独立控制随机小动作。手动表情会保持，不会被对话状态覆盖。
 

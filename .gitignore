@@ -29,6 +29,8 @@ voice/samples/
 voice/**/configs/trained_voice.json
 # 原模型说明禁止二次配布，保留在本机。
 鸣潮_*/
+# 用户提供的动作仅留在本机，保留来源与使用许可。
+*.fbx
 # 本机生成的训练配置与验证摘要不作为可迁移的源码分发。
 voice/**/configs/
 voice/**/validation.json

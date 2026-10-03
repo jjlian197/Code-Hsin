@@ -58,6 +58,21 @@ class QtWindowTestCase(unittest.TestCase):
             time.sleep(0.003)
 
 class DesktopTest(QtWindowTestCase):
+    def test_side_pose_window_fits_screen_and_restores_size(self):
+        original = (self.window.width(), self.window.height())
+        self.window.position_bottom_right()
+        self.window._fit_pose_window("side_lying")
+        area = self.window.screen().availableGeometry()
+        self.assertGreater(self.window.width(), self.window.height())
+        self.assertTrue(area.contains(self.window.geometry()))
+        self.window._fit_pose_window("side_lying")
+        self.window._fit_pose_window("idle")
+        self.assertEqual((self.window.width(), self.window.height()), original)
+        self.window._fit_pose_window("side_lying")
+        self.window._resize_scale(.5)
+        self.window._fit_pose_window("wave")
+        self.assertEqual((self.window.width(), self.window.height()), (200, 300))
+
     def test_mood_rewards_only_successful_chat_and_focus_completion(self):
         from unittest.mock import patch
         self.window.tts.enabled = False  # 只验情绪事件，不让模拟对话请求备用联网音色。

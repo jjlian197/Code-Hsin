@@ -53,6 +53,28 @@
     {
       "path": "src/assets/pmx_viewer/lib/three/three.module.js",
       "sha256": "61718c7d4f2c65be011b954f51661079fbd3fa9839380cce38cf71c06153eddb"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/curves/NURBSCurve.js",
+      "sha256": "34dee297704432358680934a8d5acae35f05c71aa59ce7a8e97decb0ac38e452"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/curves/NURBSUtils.js",
+      "sha256": "0abeeab213f423c6ea7170abe045e6d27d63c0a1164e67de1da881e0e5c7480f"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/fflate.module.js",
+      "sha256": "209a4412eb48ce609edb4391992a792ffcc3983d30ee7e2b0b89a8c470f3cd8a"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/libs/LICENSE.fflate",
+      "sha256": "805f6cb28bb8b6d3a0badd83c93bccd9671fa01a3b4b92b7042b0743325ac243"
+    },
+    {
+      "path": "src/assets/pmx_viewer/lib/three/addons/loaders/FBXLoader.js",
+      "sha256": "3fe82e7f8f2307fe2c8448c415dccb68746230a8f6bc507ddde9cf89dd88278d"
     }
-  ]
+  ],
+  "fflate_version": "0.8.2",
+  "fflate_source": "https://github.com/101arrowz/fflate/tree/v0.8.2"
 }

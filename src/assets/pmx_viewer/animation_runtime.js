@@ -3,6 +3,7 @@ import { MMDAnimationHelper } from 'three/addons/animation/MMDAnimationHelper.js
 import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { createBuiltinClips, palmNormal } from './motions.js';
 import { HsinBehavior } from './behavior.js';
+import { loadLayingPose } from './laying_pose.js';
 
 // 每个模型使用独立的 Ammo arena。切换时释放整个 arena 的引用，避免
 // 官方 MMDPhysics 缺少销毁接口导致刚体在同一 WASM heap 中累积。
@@ -34,6 +35,8 @@ export class AnimationRuntime {
     this.activeAction = null;
     this.finishedAction = null;
     this.motion = 'idle';
+    this.poseProfile = null;
+    this.poseCache = new Map();
     this.physicsEnabled = options.physics !== false;
     this.helper.enable('physics', this.physicsEnabled);
     this.frames = this.steps = this.elapsed = 0;
@@ -57,6 +60,10 @@ export class AnimationRuntime {
     this.activeAction = null;
     this.finishedAction = null;
     this.motion = group;
+    const leavingPose=!!this.poseProfile;
+    this.poseProfile = null;
+    this.helper.enable('ik',true);
+    this.helper.enable('physics',this.physicsEnabled);
     this.behavior.setMotionClip(null);
     this.behavior.setManualMotion(group!=='idle');
     if (group !== 'idle') {
@@ -64,6 +71,30 @@ export class AnimationRuntime {
       this.activeAction.reset().setLoop(THREE.LoopOnce, 1).play();
     }
     this.evaluatePose();
+    if(leavingPose)this.physics.reset();
+  }
+
+  async loadSideLying(url) {
+    const target=this.mesh,request=++this.motionGeneration;
+    if(!this.poseCache.has(url))this.poseCache.set(url,loadLayingPose(url,target));
+    let clip;
+    try {clip=await this.poseCache.get(url);}catch(error){this.poseCache?.delete(url);if(this.mesh&&request===this.motionGeneration)throw error;return;}
+    if(!this.mesh||request!==this.motionGeneration)return;
+    const affected=new Set(clip.tracks.map(track=>track.name));
+    const previousBase=this.baseAction,previousAction=this.activeAction;
+    const cacheKey='side:'+url;
+    if(!this.maskedIdleCache.has(cacheKey))this.maskedIdleCache.set(cacheKey,new THREE.AnimationClip('idle:side_lying',4,this.clips.idle.tracks.filter(t=>!affected.has(t.name))));
+    const masked=this.maskedIdleCache.get(cacheKey);
+    this.baseAction=this.mixer.clipAction(masked).reset().play();
+    this.activeAction=this.mixer.clipAction(clip).reset().setLoop(THREE.LoopRepeat,Infinity).play();
+    if(previousBase!==this.baseAction)previousBase.stop();
+    if(previousAction&&previousAction!==this.activeAction)previousAction.stop();
+    this.finishedAction=null;this.motion='side_lying';this.poseProfile='stable_side';
+    this.behavior.setMotionClip(clip);this.behavior.setManualMotion(true);
+    this.helper.enable('ik',false);
+    this.helper.enable('physics',false);
+    this.evaluatePose();
+    this.physics.reset();
   }
 
   restoreIdle() {
@@ -81,7 +112,7 @@ export class AnimationRuntime {
     this.behavior.applyBones();
     this.behavior.applyFace();
     this.mesh.updateMatrixWorld(true);
-    this.helper.enable('physics', this.physicsEnabled);
+    this.helper.enable('physics', this.physicsEnabled && !this.poseProfile);
   }
 
   async loadVmd(url, name) {
@@ -109,6 +140,7 @@ export class AnimationRuntime {
         this.clips.idle.tracks.filter(track => !affected.has(track.name))));
     }
     const idle = this.maskedIdleCache.get(url);
+    this.poseProfile=null;this.helper.enable('ik',true);
     const previousBase = this.baseAction, previousAction = this.activeAction;
     this.baseAction = this.mixer.clipAction(idle).reset().play();
     this.activeAction = this.mixer.clipAction(clip);
@@ -128,7 +160,7 @@ export class AnimationRuntime {
 
   setPhysics(enabled) {
     this.physicsEnabled = enabled;
-    this.helper.enable('physics', enabled);
+    this.helper.enable('physics', enabled && !this.poseProfile);
     if (enabled) this.physics.reset();
   }
 
@@ -137,8 +169,9 @@ export class AnimationRuntime {
     this.helper.enable('physics', false);
     this.behavior.prepareFrame();
     this.helper.update(0);
-    this.physics.reset().warmup(30);
-    this.helper.enable('physics', enabled);
+    this.physics.reset();
+    if(!this.poseProfile)this.physics.warmup(30);
+    this.helper.enable('physics', enabled && !this.poseProfile);
   }
 
   update(delta) {
@@ -159,13 +192,13 @@ export class AnimationRuntime {
       this.evaluatePose();
     }
     else {
-      if(!this.physicsEnabled)this.behavior.applyBones();
+      if(!this.physicsEnabled||this.poseProfile)this.behavior.applyBones();
       this.behavior.applyFace();
     }
     this.mesh.updateMatrixWorld(true);
     this.frames++;
     this.elapsed += delta;
-    if (this.physicsEnabled) this.steps++;
+    if (this.physicsEnabled && !this.poseProfile) this.steps++;
   }
 
   snapshot() {
@@ -174,6 +207,7 @@ export class AnimationRuntime {
       motionAngle = Math.max(motionAngle, b.bone.quaternion.angleTo(this.restRotations[i]));
     });
     return { motion: this.motion, physics_enabled: this.physicsEnabled,
+      physics_active:this.physicsEnabled&&!this.poseProfile,pose_profile:this.poseProfile,
       engine: 'Ammo/Bullet', rigid_bodies: this.physics.bodies.length,
       constraints: this.physics.constraints.length, dynamic_bones: this.dynamicBodies.length,
       frames: this.frames, physics_steps: this.steps, dynamic_bone_angle: motionAngle,
@@ -195,6 +229,7 @@ export class AnimationRuntime {
     this.mesh = this.helper = this.physics = this.mixer = this.ammo = null;
     this.dynamicBodies = this.restRotations = this.clips = this.activeAction = null;
     this.vmdCache.clear(); this.vmdCache = this.baseAction = null;
+    this.poseCache.clear();this.poseCache=null;
     this.maskedIdleCache.clear(); this.maskedIdleCache = null;
     this.behavior = null;
     window.Ammo = null;

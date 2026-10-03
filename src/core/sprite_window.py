@@ -40,6 +40,7 @@ class HsinSpriteWindow(QMainWindow):
         self.drag_position = None
         self._press_point = None
         self._dragged = False
+        self._standing_size = None
         self._current_background = "transparent"
         self.is_click_through = False
         self._always_on_top = config["sprite"]["window"]["always_on_top"]
@@ -91,6 +92,7 @@ class HsinSpriteWindow(QMainWindow):
             self.stt.changed.connect(self._sync_companion)
             self.voice_player.player.playbackStateChanged.connect(self._sync_companion)
             self.sprite_view.load_finished.connect(self._model_actions_ready)
+            self.sprite_view.pose_changed.connect(self._fit_pose_window)
         self._setup_tray()
         self.tts.changed.connect(self._refresh_voice_menu)
         self.chat.changed.connect(self._refresh_chat_menu)
@@ -196,7 +198,7 @@ class HsinSpriteWindow(QMainWindow):
             motions_menu = menu.addMenu("动作")
             self._motion_actions = {}
             for key, label in (("idle", "待机"), ("nod", "点头"), ("wave", "挥手"),
-                               ("peace", "V 手势"), ("finger_heart", "指尖比心"), ("crossed_arms", "交叉手臂")):
+                               ("peace", "V 手势"), ("finger_heart", "指尖比心"), ("crossed_arms", "交叉手臂"), ("side_lying", "侧躺（保持；选择待机恢复站立）")):
                 action = motions_menu.addAction(label, lambda checked=False, group=key: self._play_motion(group))
                 action.setEnabled(False)
                 self._motion_actions[key] = action
@@ -463,7 +465,33 @@ class HsinSpriteWindow(QMainWindow):
 
     def _resize_scale(self, scale):
         window = self.config["sprite"]["window"]
-        self.set_size(int(window["width"] * scale), int(window["height"] * scale))
+        width, height = int(window["width"] * scale), int(window["height"] * scale)
+        if self._standing_size is not None:
+            self._standing_size = (width, height)
+            width, height = self._side_window_size(width, height)
+        self.set_size(width, height)
+        self._keep_on_screen()
+
+    def _side_window_size(self, width, height):
+        area = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        scale = min(width / 400, height / 600)
+        factor = min(scale, area.width() / 900, area.height() / 420)
+        return max(1, round(900 * factor)), max(1, round(420 * factor))
+
+    def _keep_on_screen(self):
+        area = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        self.move(max(area.left(), min(self.x(), area.right() + 1 - self.width())),
+                  max(area.top(), min(self.y(), area.bottom() + 1 - self.height())))
+
+    def _fit_pose_window(self, motion):
+        if motion == "side_lying" and self._standing_size is None:
+            self._standing_size = (self.width(), self.height())
+            self.set_size(*self._side_window_size(*self._standing_size))
+            self._keep_on_screen()
+        elif motion != "side_lying" and self._standing_size is not None:
+            size, self._standing_size = self._standing_size, None
+            self.set_size(*size)
+            self._keep_on_screen()
 
     def position_bottom_right(self):
         screen = self.screen() or QApplication.primaryScreen()
