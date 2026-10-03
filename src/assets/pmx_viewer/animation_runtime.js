@@ -20,6 +20,7 @@ export class AnimationRuntime {
     this.mesh = mesh;
     this.ammo = ammo;
     window.Ammo = ammo;
+    this.bindPose = mesh.skeleton.bones.map(b=>({position:b.position.clone(),rotation:b.quaternion.clone()}));
     this.clips = createBuiltinClips(mesh);
     this.helper = new MMDAnimationHelper({ sync: false, resetPhysicsOnLoop: false });
     this.helper.onBeforePhysics = model => { this.behavior?.applyBones(); model.updateMatrixWorld(true); };
@@ -54,13 +55,14 @@ export class AnimationRuntime {
 
   play(group) {
     if (!(group in this.clips)) throw new Error('未知动作');
+    const leavingPose=!!this.poseProfile;
+    this.behavior.prepareFrame();
     this.restoreIdle();
     if (this.activeAction) this.activeAction.stop();
     this.motionGeneration++;
     this.activeAction = null;
     this.finishedAction = null;
     this.motion = group;
-    const leavingPose=!!this.poseProfile;
     this.poseProfile = null;
     this.helper.enable('ik',true);
     this.helper.enable('physics',this.physicsEnabled);
@@ -70,6 +72,7 @@ export class AnimationRuntime {
       this.activeAction = this.mixer.clipAction(this.clips[group]);
       this.activeAction.reset().setLoop(THREE.LoopOnce, 1).play();
     }
+    if(leavingPose)this.restoreBindPose();
     this.evaluatePose();
     if(leavingPose)this.physics.reset();
   }
@@ -103,6 +106,17 @@ export class AnimationRuntime {
     // 先激活新的待机绑定，再解除旧动作；共有骨骼不会暂时恢复 T pose。
     this.baseAction = this.mixer.clipAction(this.clips.idle).reset().play();
     previous.stop();
+  }
+
+  restoreBindPose() {
+    // 停止侧躺 action 只解除 mixer 绑定；MMDHelper 下一帧仍会恢复侧躺的骨骼备份。
+    // 同时重置真实骨骼和 helper 的动画前备份，再让待机/新动作、IK 与物理重新求值。
+    const backup=this.helper.objects.get(this.mesh).backupBones;
+    this.mesh.skeleton.bones.forEach((bone,i)=>{
+      bone.position.copy(this.bindPose[i].position);
+      bone.quaternion.copy(this.bindPose[i].rotation);
+      if(backup){bone.position.toArray(backup,i*7);bone.quaternion.toArray(backup,i*7+3);}
+    });
   }
 
   evaluatePose() {
@@ -140,6 +154,7 @@ export class AnimationRuntime {
         this.clips.idle.tracks.filter(track => !affected.has(track.name))));
     }
     const idle = this.maskedIdleCache.get(url);
+    const leavingPose=!!this.poseProfile;
     this.poseProfile=null;this.helper.enable('ik',true);
     const previousBase = this.baseAction, previousAction = this.activeAction;
     this.baseAction = this.mixer.clipAction(idle).reset().play();
@@ -152,6 +167,7 @@ export class AnimationRuntime {
     this.behavior.setMotionClip(clip);
     this.behavior.setManualMotion(true);
     this.behavior.prepareFrame();
+    if(leavingPose)this.restoreBindPose();
     this.helper.enable('physics', false);
     this.helper.update(0);
     this.physics.reset();
@@ -214,6 +230,10 @@ export class AnimationRuntime {
       motion_time: this.activeAction?.time || 0, animation_time: this.elapsed,
       document_hidden: document.hidden,
       head_rotation: this.mesh.skeleton.bones.find(b => b.name === '頭')?.rotation.toArray().slice(0, 3),
+      root_rotation: this.mesh.skeleton.bones.find(b => b.name === 'センター')?.quaternion.toArray(),
+      root_position: this.mesh.skeleton.bones.find(b => b.name === 'センター')?.position.toArray(),
+      body_positions: Object.fromEntries([['head','頭'],['right_ankle','右足首'],['left_ankle','左足首']].map(([key,name])=>
+        [key,this.mesh.skeleton.bones.find(b=>b.name===name)?.getWorldPosition(new THREE.Vector3()).toArray()])),
       torso_position: this.mesh.skeleton.bones.find(b => b.name === '上半身')?.position.toArray(),
       right_arm_rotation: this.mesh.skeleton.bones.find(b => b.name === '右腕')?.rotation.toArray().slice(0, 3),
       left_arm_rotation: this.mesh.skeleton.bones.find(b => b.name === '左腕')?.rotation.toArray().slice(0, 3),
@@ -228,6 +248,7 @@ export class AnimationRuntime {
     this.helper.remove(this.mesh);
     this.mesh = this.helper = this.physics = this.mixer = this.ammo = null;
     this.dynamicBodies = this.restRotations = this.clips = this.activeAction = null;
+    this.bindPose = null;
     this.vmdCache.clear(); this.vmdCache = this.baseAction = null;
     this.poseCache.clear();this.poseCache=null;
     this.maskedIdleCache.clear(); this.maskedIdleCache = null;

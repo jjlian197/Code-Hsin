@@ -43,6 +43,7 @@ def main():
                 await asyncio.sleep(.1)
             else:
                 raise AssertionError("模型加载超时")
+            initial = await probe.state()
             response = await bridge.execute({"type": "motion", "data": {"group": "side_lying"}})
             assert response["success"] and response["type"] == "motion_loading", response
             for _ in range(150):
@@ -98,12 +99,26 @@ def main():
             result["forms"].append({"form": form, "state": held, "framing": frames})
             if form == "second":
                 await gui(lambda: window.sprite_view.set_physics(False))
-            await gui(lambda: window.sprite_view.trigger_motion("idle"))
+            await gui(lambda: window._motion_actions["idle"].trigger())
             await asyncio.sleep(.5)
             standing = await probe.state()
             assert standing["motion"] == "idle" and standing["physics_active"] == (form == "first")
             assert abs(standing["right_arm_rotation"][2] - .67) < .04
+            await probe.capture("side-to-idle-" + form)
+            assert all(abs(a-b)<1e-4 for a,b in zip(standing["root_rotation"],initial["root_rotation"])), standing
+            assert all(abs(a-b)<1e-4 for a,b in zip(standing["root_position"],initial["root_position"])), standing
+            assert standing["body_positions"]["head"][1] > max(standing["body_positions"][key][1] for key in ("right_ankle", "left_ankle")) + 15, "待机必须在世界坐标中恢复直立，不能只检查动作名和手臂"
+            result["forms"][-1]["restored_standing"] = standing
             assert await gui(lambda: (window.width(), window.height()) == original_size), "退出侧躺恢复原窗口尺寸"
+            for _ in range(3):
+                await gui(lambda: window._motion_actions["side_lying"].trigger())
+                await asyncio.sleep(.3)
+                assert (await probe.state())["motion"] == "side_lying"
+                await gui(lambda: window._motion_actions["idle"].trigger())
+                await asyncio.sleep(.3)
+                repeated = await probe.state()
+                assert all(abs(a-b)<1e-4 for a,b in zip(repeated["root_rotation"],initial["root_rotation"]))
+                assert repeated["body_positions"]["head"][1] > max(repeated["body_positions"][key][1] for key in ("right_ankle", "left_ankle")) + 15
             await gui(lambda: (window.sprite_view.trigger_motion("side_lying"), window.sprite_view.trigger_motion("idle")))
             await asyncio.sleep(.5)
             assert (await probe.state())["motion"] == "idle", "后发动作取消尚在加载的 FBX"

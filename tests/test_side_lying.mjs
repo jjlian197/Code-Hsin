@@ -5,6 +5,11 @@ import * as THREE from '../src/assets/pmx_viewer/lib/three/three.module.js';
 import { Parser } from '../src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.module.js';
 import { FBXLoader } from '../src/assets/pmx_viewer/lib/three/addons/loaders/FBXLoader.js';
 import { retargetLayingPose } from '../src/assets/pmx_viewer/laying_pose.js';
+import { MMDAnimationHelper } from '../src/assets/pmx_viewer/lib/three/addons/animation/MMDAnimationHelper.js';
+import { createBuiltinClips } from '../src/assets/pmx_viewer/motions.js';
+import { HsinBehavior } from '../src/assets/pmx_viewer/behavior.js';
+globalThis.window={Ammo:null};
+const { AnimationRuntime }=await import('../src/assets/pmx_viewer/animation_runtime.js');
 
 const config=JSON.parse(execFileSync('python',['-c',
   'import json; from src.core.app_config import load_config,project_path; c=load_config(); print(json.dumps({"pose":str(project_path(c["sprite"]["animation"]["side_lying"])),"models":[str(project_path(p)) for p in c["sprite"]["model"]["forms"].values()]}))'],{encoding:'utf8'}));
@@ -40,9 +45,40 @@ for(const path of config.models){
   assert.deepEqual(bones.map(b=>b.quaternion.toArray()),pose,'static FBX holds over multiple loops');
   mixer.stopAllAction();mixer.uncacheRoot(mesh);
   assert(bones.every(b=>b.quaternion.toArray().every(Number.isFinite)));
+  // 用真实 helper 的骨骼备份和应用的切换路径复现退出问题；离线不运行 Ammo。
+  mesh.pose();mesh.morphTargetDictionary={};mesh.morphTargetInfluences=[];
+  Object.assign(mesh.geometry.userData.MMD,{iks:[],grants:[]});
+  const clips=createBuiltinClips(mesh),helper=new MMDAnimationHelper({sync:false});
+  helper.add(mesh,{animation:clips.idle,physics:false});
+  const runtime=Object.assign(Object.create(AnimationRuntime.prototype),{
+    mesh,helper,clips,mixer:helper.objects.get(mesh).mixer,
+    bindPose:bones.map(b=>({position:b.position.clone(),rotation:b.quaternion.clone()})),
+    behavior:new HsinBehavior(mesh,{breathing:false,mouse_follow:false,random_idle:false}),
+    physics:{reset(){}},physicsEnabled:false,poseProfile:null,activeAction:null,finishedAction:null,
+    motionGeneration:0,poseCache:new Map([['local',Promise.resolve(clip)]]),maskedIdleCache:new Map(),vmdCache:new Map()
+  });
+  runtime.baseAction=runtime.mixer.clipAction(clips.idle);runtime.evaluatePose();
+  const assertUpright=()=>{
+    const root=bones.find(b=>b.name==='センター');
+    assert(root.quaternion.angleTo(new THREE.Quaternion())<1e-5,'center rotation must be upright');
+    assert(root.position.distanceTo(runtime.bindPose[bones.indexOf(root)].position)<1e-5,'center position must return to standing');
+    assert(position('頭').y>Math.max(position('右足首').y,position('左足首').y)+15,'verify world posture rather than motion name');
+  };
+  for(const motion of ['idle','nod','wave']){
+    await runtime.loadSideLying('local');helper.update(.1);mesh.updateMatrixWorld(true);
+    assert(bones.find(b=>b.name==='センター').quaternion.angleTo(new THREE.Quaternion())>1,'enter actual side-lying');
+    runtime.play(motion);
+    for(let i=0;i<10;i++){runtime.evaluatePose();assertUpright();}
+    runtime.play('idle');
+  }
+  await runtime.loadSideLying('local');helper.update(.1);
+  runtime.vmdCache.set('vmd',Promise.resolve(new THREE.AnimationClip('head-vmd',1,[new THREE.QuaternionKeyframeTrack('.bones[頭].quaternion',[0,1],[0,0,0,1,0,0,0,1])])));
+  await runtime.loadVmd('vmd','head-vmd');
+  for(let i=0;i<10;i++){runtime.evaluatePose();assertUpright();}
+  helper.remove(mesh);runtime.mixer.stopAllAction();runtime.mixer.uncacheRoot(mesh);
 }
 const invalid=new THREE.Group();invalid.animations=[source.animations.find(c=>c.tracks.length>20)];
 assert.throws(()=>retargetLayingPose(invalid,null),/缺少 Mixamo/);
 invalid.animations=[new THREE.AnimationClip('dance',10,invalid.animations[0].tracks)];
 assert.throws(()=>retargetLayingPose(invalid,null),/定格 FBX/);
-console.log('PASS: both forms, static FBX retargeting, shallow knee, held pose, clothing reset and live-mesh restoration');
+console.log('PASS: both forms, FBX retargeting, held pose, real MMD helper cache, idle/nod/wave/VMD restore standing');
