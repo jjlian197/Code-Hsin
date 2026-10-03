@@ -66,6 +66,7 @@ def main(argv=None):
     window.chat.changed.connect(lambda: services.broadcast_sync("chat_status", window.chat.snapshot()))
     window.stt.changed.connect(lambda: services.broadcast_sync("stt_status", window.stt.snapshot()))
     window.pomodoro.changed.connect(lambda: services.broadcast_sync("pomodoro_status", window.pomodoro.snapshot()))
+    window.mood.changed.connect(lambda: services.broadcast_sync("mood_status", window.mood.snapshot()))
     try:
         services.start()
     except RuntimeError as exc:

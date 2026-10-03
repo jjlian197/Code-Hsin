@@ -131,14 +131,29 @@ class ControlBridge(QObject):
                                    "info": getattr(view, "model_info", {})},
                       "tts": window.tts.snapshot(), "audio": window.voice_player.snapshot(), "chat": window.chat.snapshot(), "stt": window.stt.snapshot(),
                       "pomodoro": window.pomodoro.snapshot(),
+                      "mood": window.mood.snapshot(),
                       "voice_dataset_available": project_path(window.config["voice"]["manifest"]).is_file(),
-                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro"]}
+                      "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro", "mood"]}
             if view.renderer_name == "pmx":
                 status["capabilities"].append("model")
             if view.model_loaded:
                 status["capabilities"].extend(["expression", "motion", "physics", "look_at", "parameter", "parameter_batch", "behavior", "blink", "lip_sync", "audio"])
                 status["available_parameters"] = {key: list(limits) for key, limits in PARAMETER_RANGES.items()}
             return self.success("status", status)
+        if kind == "mood":
+            action = data.get("action", "status")
+            allowed = {"action", "auto_expression"} if action == "configure" else {"action"}
+            if set(data) - allowed:
+                raise CommandError("未知心情参数")
+            if action == "status":
+                window._tick_mood()
+            elif action == "configure":
+                window.mood.configure(data.get("auto_expression"))
+            elif action == "open":
+                window.open_mood()
+            else:
+                raise CommandError("mood.action 需要 status、configure 或 open")
+            return self.success("mood_status", window.mood.snapshot())
         if kind == "pomodoro":
             action = data.get("action", "status")
             allowed = {"action"} | ({"phase"} if action == "start" else set(window.pomodoro.settings) if action == "configure" else set())

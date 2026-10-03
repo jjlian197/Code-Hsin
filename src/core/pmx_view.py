@@ -66,6 +66,7 @@ class PmxView(QWidget):
         self._audio_input = {"value": 0.0, "active": False}
         self._audio_timestamp = 0.0
         self._activity_input = {"state": "idle", "interacting": False}
+        self._mood_input = {"expression": "normal", "enabled": False}
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.web = QWebEngineView(self)
         page = PmxPage(self.web)
@@ -256,6 +257,14 @@ class PmxView(QWidget):
         self._activity_input = value
         if self.model_loaded:
             self.web.page().runJavaScript(f"window.HsinPmx.setActivity({json.dumps(value)});")
+
+    def set_mood(self, expression, enabled, *, force=False):
+        value = {"expression": expression, "enabled": bool(enabled)}
+        if value == self._mood_input and not force:
+            return
+        self._mood_input = value
+        if self.model_loaded:
+            self.web.page().runJavaScript(f"window.HsinPmx.setMood({json.dumps(value)});")
 
     def set_lip_sync(self, value, shape="a", duration=250):
         self.web.page().runJavaScript(f"window.HsinPmx.setLipSync({value}, {json.dumps(shape)}, {duration / 1000});")

@@ -14,7 +14,7 @@ class HTTPServer:
         self.app.router.add_get("/health", self._status)
         self.app.router.add_get("/api/status", self._status)
         self.app.router.add_post("/api/command", self._command)
-        for name in ("window", "message", "background", "expression", "motion", "physics", "model", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro", "look_at", "parameter", "parameter_batch", "behavior", "blink", "lip_sync", "audio"):
+        for name in ("window", "message", "background", "expression", "motion", "physics", "model", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro", "mood", "look_at", "parameter", "parameter_batch", "behavior", "blink", "lip_sync", "audio"):
             self.app.router.add_post("/api/" + name, self._command)
 
     async def start(self):

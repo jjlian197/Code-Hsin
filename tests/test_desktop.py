@@ -58,6 +58,67 @@ class QtWindowTestCase(unittest.TestCase):
             time.sleep(0.003)
 
 class DesktopTest(QtWindowTestCase):
+    def test_mood_rewards_only_successful_chat_and_focus_completion(self):
+        from unittest.mock import patch
+        self.window.tts.enabled = False  # 只验情绪事件，不让模拟对话请求备用联网音色。
+        class FailedBackend:
+            async def chat(self, *_):
+                raise RuntimeError("模拟失败")
+        with patch("src.core.chat_manager.make_backend", return_value=FailedBackend()):
+            self.window.send_chat("一次失败的对话")
+            self.wait(.05)
+        self.assertEqual(self.window.mood.snapshot()["affection"], 30)
+        class SuccessfulBackend:
+            async def chat(self, *_):
+                return "收到成功回复"
+        self.window.chat.backends.clear()
+        with patch("src.core.chat_manager.make_backend", return_value=SuccessfulBackend()):
+            self.window.send_chat("完成一轮对话")
+            self.wait(.05)
+        self.window.chat.reply_ready.emit("同一轮重复回调", "zh")
+        self.assertEqual(self.window.mood.snapshot()["affection"], 32)
+        clock = [100.0]
+        self.window.pomodoro.clock = lambda: clock[0]
+        self.window.pomodoro.configure(sound=False)
+        self.window.pomodoro.start()
+        clock[0] += 1500
+        self.window.pomodoro.tick()
+        self.window.pomodoro.tick()
+        self.assertEqual(self.window.mood.snapshot()["affection"], 35)
+        self.window.pomodoro.start()
+        clock[0] += 300
+        self.window.pomodoro.tick()
+        self.assertEqual(self.window.mood.snapshot()["affection"], 35, "休息结束不重复奖励专注")
+        self.window.open_mood()
+        dialog = self.window.mood_dialog
+        self.window.set_click_through(True)
+        self.window.hide_sprite()
+        self.assertTrue(dialog.isVisible())
+        dialog.close()
+        self.window.touch_event.emit("tap", "头部")
+        self.window.open_mood()
+        self.assertEqual(dialog.affection_bar.value(), 36)
+
+    def test_touch_does_not_cancel_chat_speech_and_selects_unlocked_japanese_reply(self):
+        from unittest.mock import patch
+        from src.core.voice_phrases import FOND_TOUCH_REPLIES
+        self.window.sprite_view._behavior_settings = {"touch_reactions": True}
+        self.window.mood._save({**self.window.mood.data, "affection": 80})
+        self.window.tts.language = "ja"
+        self.window.chat.busy = True
+        with patch.object(self.window.tts, "speak") as speak, patch.object(self.window, "show_message") as bubble:
+            self.window._touch_reaction("hand")
+            speak.assert_not_called()
+            bubble.assert_not_called()
+        self.window.chat.busy = False
+        with patch.object(self.window.voice_player, "snapshot", return_value={"state": "PlayingState"}), patch.object(self.window.tts, "speak") as speak:
+            self.window._touch_reaction("hand")
+            speak.assert_not_called()
+        with patch.object(self.window.tts, "snapshot", return_value={"active": False, "configured": True}), patch.object(self.window.tts, "speak") as speak:
+            self.window.tts.enabled = True
+            self.window._touch_reaction("hand")
+            speak.assert_called_once_with(FOND_TOUCH_REPLIES["ja"]["hand"])
+
     def test_pomodoro_survives_panel_close_sprite_hide_and_click_through(self):
         from unittest.mock import patch
         now = [100.0]
@@ -344,6 +405,22 @@ class APITest(QtWindowTestCase):
         self.window.touch_event.emit("tap", "身体")
         result = future.result(timeout=3)
         self.assertEqual(result, {"type": "touch_event", "data": {"action": "tap", "part": "身体"}})
+
+    def test_mood_http_settings_and_websocket_snapshot(self):
+        async def client():
+            async with ClientSession() as session:
+                url = self.services.endpoints()["http"] + "/api/mood"
+                async with session.post(url, json={"action": "configure", "auto_expression": False}) as r:
+                    self.assertFalse((await r.json())["data"]["auto_expression"])
+                for invalid in ({"action": "configure", "auto_expression": 1}, {"action": "configure", "auto_expression": True, "affection": 100}):
+                    async with session.post(url, json=invalid) as r:
+                        self.assertEqual(r.status, 400)
+            async with websockets.connect(self.services.endpoints()["websocket"]) as ws:
+                await ws.send(json.dumps({"type": "mood", "data": {"action": "status"}}))
+                result = json.loads(await ws.recv())
+                self.assertEqual(result["data"]["affection"], 30)
+                self.assertFalse(result["data"]["auto_expression"])
+        self.network(client())
 
     def test_pomodoro_http_settings_and_websocket_controls(self):
         async def client():

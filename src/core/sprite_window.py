@@ -13,9 +13,10 @@ from src.core.pmx_view import PmxView
 from src.core.voice_player import LocalVoicePlayer
 from src.core.tts_manager import TTSManager
 from src.core.stt_manager import STTManager
-from src.core.voice_phrases import TOUCH_REPLIES, PREVIEW_PHRASES
+from src.core.voice_phrases import TOUCH_REPLIES, PREVIEW_PHRASES, TRUSTED_TOUCH_REPLIES, FOND_TOUCH_REPLIES
 from src.core.chat_manager import ChatManager
 from src.core.pomodoro import PomodoroManager
+from src.core.mood import MoodManager
 from src.core.chat_backends import PROVIDERS
 from src.ui.app_icon import create_icon
 from src.ui.background_frame import BackgroundFrame
@@ -52,6 +53,12 @@ class HsinSpriteWindow(QMainWindow):
         self._top_action.triggered.connect(self.set_always_on_top)
         self._setup_window()
         self._setup_ui()
+        self.mood = MoodManager(self._state_path.with_name("mood.json"), self)
+        self.mood_dialog = None
+        self._mood_chat_generation = -1
+        self._mood_focus_count = 0
+        self.mood.changed.connect(self._sync_mood)
+        self.touch_event.connect(self._mood_touch)
         self.pomodoro = PomodoroManager(self._state_path.with_name("pomodoro.json"), self)
         self.pomodoro_dialog = None
         self.pomodoro_overlay = PomodoroOverlay(self)
@@ -91,6 +98,9 @@ class HsinSpriteWindow(QMainWindow):
         self._refresh_voice_menu()
         self.stt.changed.connect(self._refresh_microphone_menu)
         self._refresh_microphone_menu()
+        self.mood.timer.timeout.connect(self._tick_mood)
+        self.mood.timer.start()
+        self._sync_mood()
         self._restore_state()
         self.setWindowOpacity(float(config["sprite"]["window"]["opacity"]))
         self.set_click_through(config["sprite"]["window"]["click_through"])
@@ -154,6 +164,13 @@ class HsinSpriteWindow(QMainWindow):
         menu.addAction("回到屏幕右下角", self.position_bottom_right)
         menu.addAction("和心聊天…", self.open_chat)
         menu.addAction("番茄钟…", self.open_pomodoro)
+        mood_menu = menu.addMenu("心情与好感度")
+        self._mood_status_action = mood_menu.addAction("")
+        self._mood_status_action.setEnabled(False)
+        mood_menu.addAction("查看陪伴状态…", self.open_mood)
+        self._mood_auto_action = mood_menu.addAction("让心情自然影响表情")
+        self._mood_auto_action.setCheckable(True)
+        self._mood_auto_action.triggered.connect(self.configure_mood)
         backend_menu = menu.addMenu("对话后端")
         backend_group = QActionGroup(backend_menu)
         backend_group.setExclusive(True)
@@ -334,6 +351,7 @@ class HsinSpriteWindow(QMainWindow):
             action.setEnabled(success and name in self.sprite_view.get_available_expressions())
             action.setChecked(name == self.sprite_view.current_expression)
         self._sync_companion()
+        self._sync_mood(force=True)
 
     def set_expression(self, name):
         self.sprite_view.set_expression(name)
@@ -399,6 +417,9 @@ class HsinSpriteWindow(QMainWindow):
         self.tts.stop()
 
     def _chat_reply(self, text, language):
+        if self.chat.last_request and self.chat.last_request["id"] == self.chat.generation and self.chat.generation != self._mood_chat_generation:
+            self._mood_chat_generation = self.chat.generation
+            self.mood.interact("chat")
         self.show_message(text[:2000], 12000)
 
     def show_sprite(self):
@@ -494,7 +515,12 @@ class HsinSpriteWindow(QMainWindow):
         names = {"head": "头部", "body": "身体", "hand": "手", "tail": "尾巴"}
         self.touch_event.emit("tap", names.get(part, "身体"))
         if self.sprite_view._behavior_settings["touch_reactions"]:
-            replies = TOUCH_REPLIES[self.tts.language]
+            # 触摸不会替换正在回复的文字，或取消已经排队的对话语音。
+            if self.chat.busy or self.tts.snapshot()["active"] or self.voice_player.snapshot()["state"] != "StoppedState":
+                return
+            tier = self.mood.snapshot()["tier_index"]
+            responses = FOND_TOUCH_REPLIES if tier >= 3 else TRUSTED_TOUCH_REPLIES if tier >= 2 else TOUCH_REPLIES
+            replies = responses[self.tts.language]
             text = replies.get(part, replies["body"])
             self.show_message(text, 3000)
             if self.tts.enabled and self.tts.snapshot()["configured"] and time.monotonic() - self._last_spoken_touch >= 3:
@@ -590,12 +616,47 @@ class HsinSpriteWindow(QMainWindow):
         self.pomodoro_dialog.open_near(self)
 
     def _pomodoro_finished(self, message):
+        if self.pomodoro.phase == "focus" and self.pomodoro.completed_focus > self._mood_focus_count:
+            self._mood_focus_count = self.pomodoro.completed_focus
+            self.mood.interact("focus")
         if self.isVisible():
             self.show_message(message, 10000)
         if self.tray_icon:
             self.tray_icon.showMessage("心 · 番茄钟", message, QSystemTrayIcon.MessageIcon.Information, 10000)
         if self.pomodoro.settings["sound"]:
             QApplication.beep()
+
+    def _mood_touch(self, action, part):
+        if action == "tap" and getattr(self.sprite_view, "_behavior_settings", {}).get("touch_reactions", True):
+            key = {"头部": "head", "身体": "body", "手": "hand", "尾巴": "tail"}.get(part)
+            if key:
+                self.mood.interact("touch", key)
+
+    def _tick_mood(self):
+        self.mood.tick(engaged=self.chat.busy or self.tts.snapshot()["active"] or
+                       (self.pomodoro.state == "running" and self.pomodoro.phase == "focus"))
+
+    def _sync_mood(self, *, force=False):
+        value = self.mood.snapshot()
+        if self.sprite_view.renderer_name == "pmx":
+            self.sprite_view.set_mood(value["expression"], value["auto_expression"], force=force)
+        if hasattr(self, "_mood_status_action"):
+            self._mood_status_action.setText(f"{value['label']} · {value['tier']} · 好感度 {value['affection']}/100")
+            self._mood_status_action.setToolTip(value["error"] or "")
+            self._mood_auto_action.setChecked(value["auto_expression"])
+
+    def configure_mood(self, enabled):
+        try:
+            self.mood.configure(enabled)
+        except ValueError as exc:
+            self._sync_mood()
+            self.show_message(str(exc), 8000)
+
+    def open_mood(self):
+        if self.mood_dialog is None:
+            from src.ui.mood_dialog import MoodDialog
+            self.mood_dialog = MoodDialog(self)
+        self.mood_dialog.open_near(self)
 
     def moveEvent(self, event):
         super().moveEvent(event)
@@ -623,6 +684,10 @@ class HsinSpriteWindow(QMainWindow):
 
     def cleanup(self):
         self.save_state()
+        self.mood.close()
+        if self.mood_dialog:
+            self.mood_dialog.close()
+            self.mood_dialog.deleteLater()
         self.pomodoro.close()
         self.pomodoro_overlay.cleanup()
         if self.pomodoro_dialog:

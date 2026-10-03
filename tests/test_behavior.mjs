@@ -55,6 +55,21 @@ for(const [form,file] of [['心_一阶段','心.pmx'],['心_二阶段','心_二�
   assert(!behavior.touchState,'低帧率时触摸按实际时间结束');
   for(let i=0;i<40;i++)step();assert(behavior.mouthOpen<0.001);
   behavior.setExpression('normal');
+  // 情绪淡入、手动表情/动作优先，以及关闭自动情绪后的释放。
+  behavior.setMood({expression:'blush',enabled:true});
+  for(let i=0;i<80;i++)step();
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary.FaceRed]>0.5);
+  behavior.setExpression('angry');step();
+  assert.equal(mesh.morphTargetInfluences[mesh.morphTargetDictionary.FaceRed],0);
+  behavior.setExpression('normal');behavior.setManualMotion(true);step();
+  assert.equal(mesh.morphTargetInfluences[mesh.morphTargetDictionary.FaceRed],0);
+  behavior.setManualMotion(false);behavior.setMood({expression:'normal',enabled:false});
+  for(let i=0;i<100;i++)step();
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary.FaceRed]<0.001);
+  behavior.setMood({expression:'content',enabled:true});for(let i=0;i<100;i++)step();
+  behavior.forceBlink();step(.07);
+  assert(mesh.morphTargetInfluences[mesh.morphTargetDictionary['まばたき']]<.25,'自动笑眯眯时眨眼须减弱，避免眼睑叠加');
+  behavior.setMood({expression:'normal',enabled:false});for(let i=0;i<100;i++)step();
   behavior.setMotionClip(new THREE.AnimationClip('vmd',1,[new THREE.QuaternionKeyframeTrack('.bones[頭].quaternion',[0,1],[0,0,0,1,0,0,0,1])]));
   behavior.prepareFrame();head.quaternion.identity();step();
   assert(head.quaternion.angleTo(new THREE.Quaternion())<1e-6,'VMD 写入头部时跟随层让位');

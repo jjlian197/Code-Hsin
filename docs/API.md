@@ -28,6 +28,7 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 | --- | --- | --- |
 | `get_status` | `{}` | 窗口、渲染入口、模型文件存在情况、可用能力、连接数量 |
 | `pomodoro` | `action: status/open/start/pause/resume/reset/configure` | 番茄钟；start 可指定 phase: focus/short_break/long_break，默认开始推荐的下一阶段；设置与状态见 [番茄钟说明](POMODORO.md) |
+| `mood` | `action: status/open/configure` | 心情与好感度；configure 仅接受布尔 auto_expression；状态包含情绪、好感度、关系阶段、解锁项与错误，见 [陪伴状态](MOOD.md) |
 | `message` | `text`, `duration` | 显示气泡；文本 1–2000 字符，duration 为毫秒，0 持续显示 |
 | `window` | `action: move`, `x`, `y` | 移动窗口，保留参考项目语义 |
 | `window` | `action: resize`, `width`, `height` | 大小范围 160–1600 |

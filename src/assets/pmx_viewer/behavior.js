@@ -30,10 +30,16 @@ export class HsinBehavior {
     this.offsetQuaternion=new THREE.Quaternion();this.offsetEuler=new THREE.Euler();
     this.activity={state:'idle',interacting:false};this.manualMotion=false;
     this.activityWeights={thinking:0,speaking:0,listening:0};
+    this.mood={expression:'normal',enabled:false};
+    this.moodWeights=Object.fromEntries(Object.keys(expressions).map(name=>[name,0]));
     this.idleAction=null;this.idleWeight=0;this.nextIdle=this.time+18+this.random()*27;
   }
 
   setExpression(name) { if(!(name in expressions))return false;this.expression=name;return true; }
+  setMood(mood) {
+    if(!(mood.expression in expressions))return false;
+    this.mood={expression:mood.expression,enabled:!!mood.enabled};return true;
+  }
   setParameters(params) { Object.assign(this.parameters,params); }
   clearParameters() { this.parameters={}; }
   setPointer(x,y,manual=false) { this.pointer={x:clamp(x,-1,1),y:clamp(y,-1,1)};this.manualLook=manual; }
@@ -66,6 +72,8 @@ export class HsinBehavior {
 
   advance(delta) {
     this.time+=delta;
+    const moodEligible=this.mood.enabled&&this.expression==='normal'&&!this.manualMotion&&!this.activity.interacting&&!this.touchState;
+    for(const name of Object.keys(this.moodWeights))this.moodWeights[name]=smooth(this.moodWeights[name],moodEligible&&this.mood.expression===name?0.65:0,4,delta);
     if(!this.settings.auto_blink && this.blinkStart===null)this.blink=0;
     if(this.settings.auto_blink && this.blinkStart===null && this.time>=this.nextBlink)this.forceBlink();
     if(this.blinkStart!==null) {
@@ -158,6 +166,10 @@ export class HsinBehavior {
 
   applyFace() {
     for(const [name,value] of Object.entries(expressions[this.expression]))this.morph(name,value);
+    // 情绪作为柔和叠加层，手动表情/动作、VMD 所有权和触摸保持优先。
+    if(this.expression==='normal'&&!this.manualMotion&&!this.activity.interacting&&!this.touchState)
+      for(const [expression,weight] of Object.entries(this.moodWeights))
+        for(const [name,value] of Object.entries(expressions[expression]))this.morph(name,value*weight);
     const p=this.parameters;
     const left=1-(p.ParamEyeLOpen??1),right=1-(p.ParamEyeROpen??1);
     const closure=Math.max(this.blink,Math.min(left,right));
@@ -165,7 +177,8 @@ export class HsinBehavior {
       // 已闭合的一侧不再叠加双眼眨眼，避免眼睑超量变形。
       this.morph('ウィンク右',Math.max(closure,right));
     }else {
-      this.morph('まばたき',closure*(this.expression==='content'?0.2:1));
+      const smilingEyes=this.expression==='content'?1:this.expression==='normal'?Math.min(1,this.moodWeights.content/0.65):0;
+      this.morph('まばたき',closure*(1-0.8*smilingEyes));
       this.morph('ウィンク',Math.max(0,left-closure));this.morph('ウィンク右',Math.max(0,right-closure));
     }
     // 模型的 Left 在 Three.js 正面相机中向屏幕右移动，已核对 PMX 顶点位移。
@@ -192,6 +205,7 @@ export class HsinBehavior {
       blink:this.blink,breath:this.breath,mouth_open:this.mouthOpen,mouth_shape:this.mouthShape,audio_driven:this.audio.active,
       parameters:{...this.parameters},last_touch:this.lastTouch,touch_active:!!this.touchState,
       activity:{...this.activity},activity_weights:{...this.activityWeights},manual_motion:this.manualMotion,
+      mood:{...this.mood},mood_weights:{...this.moodWeights},
       idle_action:this.idleAction?.name||null,idle_weight:this.idleWeight,next_idle:this.nextIdle,morphs};
   }
 }
