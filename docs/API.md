@@ -55,7 +55,9 @@ WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。�
 
 窗口变更响应为 `window_updated`，背景响应为 `background_set`，表情响应为 `expression_set`，状态响应为 `status`。加载中 `renderer.model_loaded=false`、`state=model_pending`；贴图完整加载且实际绘制后为 true / idle。失败时为 model_error，`renderer.error` 提供原因。`renderer.info` 包含顶点、三角形、骨骼、材质、表情与贴图补全数量。
 
-上述模型控制要求 PMX 已加载，加载中返回 `renderer_unavailable`。`speak` 在所选引擎与备用引擎均未就绪时返回 `tts_unavailable`，关闭语音时返回 `tts_disabled`。正常接收后返回 `tts_queued`，合成完成自动播放；实际进展与错误查询 `tts` / `audio` 状态或订阅 `tts_status`。`tts.provider` 是首选引擎，`actual_provider` 是实际音色；`warning` 标明备用音色，`stage` 包含 queued/translating/synthesizing/fallback/idle。语言或引擎切换和停止会取消旧请求的播放。本地原声播放使用 `audio`，无需训练权重。详见 [中日语音](VOICE.md)。
+上述模型控制要求 PMX 已加载，加载中返回 `renderer_unavailable`。`speak` 在所选引擎与备用引擎均未就绪时返回 `tts_unavailable`，关闭语音时返回 `tts_disabled`。正常接收后返回 `tts_queued`，合成完成自动播放；实际进展与错误查询 `tts` / `audio` 状态或订阅 `tts_status`。`tts.provider` 是首选引擎，`actual_provider` 是实际音色；`warning` 标明备用音色，`stage` 包含 queued/translating/synthesizing/fallback/playing/waiting/idle。语言或引擎切换和停止会取消旧请求及未播放队列。本地原声播放使用 `audio`，无需训练权重。详见 [中日语音](VOICE.md)。
+
+聊天自动分句朗读，无需新增命令。`tts.streaming/stream_open` 表示聊天队列及是否继续接收句子；`queued_segments/ready_segments` 分别是未合成和已合成待播放数量，`active` 包括当前播放，用于收音阻塞和停止按钮。`chat.speech` 提供累计排出字符数、当前 500 字上限与 `final_revised`（最终回复改写了已读前缀，剩余语音已取消）。最终聊天文字保留全文。显式 `speak` 继续替换当前语音，而不是向聊天队列追加。
 
 支持参数与范围可从 `available_parameters` 查询：角度 ParamAngleX (-30–30)、ParamAngleY (-20–20)、ParamAngleZ (-15–15)；上半身 ParamBodyAngleX/Y (-10–10)；眼球 ParamEyeBallX/Y (-1–1)；眼睛开放度 ParamEyeLOpen/ROpen (0–1)；张嘴 ParamMouthOpenY (0–1)；嘴角 ParamMouthForm (-1–1)。参数持续有效，直到设置新值、清除手动参数或切换模型。
 

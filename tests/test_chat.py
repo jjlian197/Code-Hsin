@@ -128,6 +128,31 @@ class ManagerTest(unittest.TestCase):
             config["hermes"]["url"]=value
             with self.assertRaises(ValueError): validate_chat_config(config)
 
+    def test_final_suffix_sentences_and_failed_stream_signal(self):
+        class Backend:
+            async def chat(self, text, language, delta):
+                await delta("御者，我在。")
+                if text == "error":
+                    raise RuntimeError("fixture interrupted")
+                return "御者，我在。まだここにいます。末句"
+        with tempfile.TemporaryDirectory() as temp, patch("src.core.chat_manager.make_backend", return_value=Backend()):
+            config = deepcopy(DEFAULT_CONFIG)
+            config["runtime"]["directory"] = temp
+            manager = ChatManager(config)
+            sentences, finishes = [], []
+            manager.sentence_ready.connect(lambda *args: sentences.append(args))
+            manager.speech_finished.connect(lambda *args: finishes.append(args))
+            try:
+                request = manager.send("ok", "ja")
+                self.pump(lambda: not manager.busy)
+                self.assertEqual(sentences, [(request["id"], t, "ja") for t in ["御者，我在。", "まだここにいます。", "末句"]])
+                self.assertEqual(finishes, [(request["id"], True)])
+                request = manager.send("error", "zh")
+                self.pump(lambda: not manager.busy)
+                self.assertEqual(finishes[-1], (request["id"], False))
+            finally:
+                manager.close()
+
 
 if __name__ == "__main__":
     unittest.main()

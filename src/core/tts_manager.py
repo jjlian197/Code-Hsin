@@ -1,5 +1,6 @@
 """异步合成、语言持久化与按音色隔离的缓存，播放和口型留在 Qt 主线程。"""
 import hashlib
+from collections import deque
 import io
 import json
 import os
@@ -12,7 +13,8 @@ import urllib.request
 import wave
 
 from loguru import logger
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtMultimedia import QMediaPlayer
 from src.core.app_config import PROJECT_ROOT, project_path
 from src.core.voice_auxiliary import EdgeSynthesizer, VoiceTranslator
 
@@ -178,9 +180,18 @@ class TTSManager(QObject):
         self.stage = "idle"
         self._closed = False
         self._condition = threading.Condition()
-        self._job = None
+        self._jobs = deque()
+        self._ready = deque()
+        self._pending = self._prefetched = self._sequence = 0
+        self._playing = self._starting = self._finishing = False
+        self._stream = None
+        self._stream_open = False
+        self._stream_language = None
         self.completed.connect(self._complete, Qt.ConnectionType.QueuedConnection)
         self.stage_changed.connect(self._stage, Qt.ConnectionType.QueuedConnection)
+        if hasattr(self.player, "player"):
+            self.player.player.playbackStateChanged.connect(self._playback_state)
+            self.player.player.errorOccurred.connect(self._playback_error)
         self._worker = threading.Thread(target=self._work, name="HsinTTS", daemon=True)
         self._worker.start()
 
@@ -192,7 +203,10 @@ class TTSManager(QObject):
                 "providers": available, "actual_provider": self.actual_provider,
                 "auto_translate": self.auto_translate, "fallback": self.fallback,
                 "stage": self.stage, "warning": self.warning,
-                "synthesizing": self.busy, "last_request": self.last_request, "error": self.error}
+                "synthesizing": self.busy, "last_request": self.last_request, "error": self.error,
+                "streaming": self._stream is not None, "stream_open": self._stream_open,
+                "queued_segments": self._pending, "ready_segments": len(self._ready),
+                "active": self.busy or bool(self._ready) or self._playing or self._finishing}
 
     def configure(self, language=None, enabled=None, provider=None, auto_translate=None, fallback=None):
         if language is not None and language not in ("zh", "ja"):
@@ -243,15 +257,44 @@ class TTSManager(QObject):
         if translate is not None and type(translate) is not bool:
             raise ValueError("translate 需要布尔值")
         self.stop()
+        translate = self.auto_translate if translate is None else translate
+        return self._submit(text.strip(), language, speed, volume, translate)
+
+    def begin_stream(self, language):
+        if language not in ("zh", "ja"):
+            raise ValueError("语言需要 zh 或 ja")
+        self.stop()
+        self._stream, self._stream_language = self.generation, language
+        self._stream_open = True
+        return self._stream
+
+    def enqueue_sentence(self, token, text, language):
+        if self._closed or not self.enabled or self._stream != token or self.generation != token or not self._stream_open:
+            return False
+        if language != self._stream_language or not isinstance(text, str) or not 1 <= len(text.strip()) <= 500:
+            return False
+        self._submit(text.strip(), language, 1.0, self.volume, False)
+        return True
+
+    def finish_stream(self, token):
+        if self._stream == token and self.generation == token:
+            self._stream_open = False
+            self._finish_if_idle()
+            self.changed.emit()
+
+    def _submit(self, text, language, speed, volume, translate):
+        self._pending += 1
+        self._sequence += 1
         self.busy = True
         self.error = None
-        self.warning = self.actual_provider = None
+        if self._sequence == 1:
+            self.warning = self.actual_provider = None
         self.stage = "queued"
-        translate = self.auto_translate if translate is None else translate
-        self.last_request = {"id": self.generation, "text": text.strip(), "language": language,
-                             "provider": self.engine, "translate": translate}
+        self.last_request = {"id": self.generation, "text": text, "language": language,
+                             "provider": self.engine, "translate": translate, "segment": self._sequence,
+                             "stream": self._stream is not None}
         with self._condition:
-            self._job = (self.generation, text.strip(), language, speed, volume, self.engine, translate, self.fallback)
+            self._jobs.append((self.generation, text, language, speed, volume, self.engine, translate, self.fallback, dict(self.last_request)))
             self._condition.notify()
         self.changed.emit()
         return dict(self.last_request)
@@ -259,11 +302,13 @@ class TTSManager(QObject):
     def _work(self):
         while True:
             with self._condition:
-                self._condition.wait_for(lambda: self._job is not None or self._closed)
+                # 当前句播放时最多预合成两句，避免长回复一次占满缓存/显存。
+                self._condition.wait_for(lambda: self._jobs and self._prefetched < 2 or self._closed)
                 if self._closed:
                     return
-                job, self._job = self._job, None
-            generation, text, language, speed, volume, engine, translate, fallback = job
+                job = self._jobs.popleft()
+                self._prefetched += 1
+            generation, text, language, speed, volume, engine, translate, fallback, request = job
             try:
                 spoken = text
                 if translate:
@@ -290,7 +335,7 @@ class TTSManager(QObject):
                     warning = "心的音色暂不可用，已使用 Edge 通用音色" if alternate == "edge" else "Edge 暂不可用，已使用心的音色"
                     engine = alternate
                 if not self._closed and generation == self.generation:
-                    self.completed.emit(generation, (path, spoken, volume, engine, warning), None)
+                    self.completed.emit(generation, (path, spoken, volume, engine, warning, request), None)
             except Exception as exc:
                 if not self._closed:
                     logger.warning("心的语音合成失败：{}", exc)
@@ -299,20 +344,65 @@ class TTSManager(QObject):
     def _complete(self, generation, result, error):
         if self._closed or generation != self.generation:
             return
-        self.busy = False
-        self.stage = "idle"
+        self._pending -= 1
+        self.busy = self._pending > 0
+        self.stage = "queued" if self.busy else "idle"
         self.error = error
-        if result:
-            path, text, volume, self.actual_provider, self.warning = result
-            self.last_request["spoken_text"] = text
-            try:
-                self.player.play(path, volume)
-                self.speech_started.emit(text)
-            except Exception as exc:
-                self.error = str(exc)
         if self.error:
+            self.stop()
             self.failed.emit(self.error)
+        elif result:
+            self._ready.append(result)
+            self._play_next()
         self.changed.emit()
+
+    def _play_next(self):
+        if self._closed or self._playing or self._finishing or not self._ready:
+            self._finish_if_idle()
+            return
+        path, text, volume, self.actual_provider, self.warning, request = self._ready.popleft()
+        with self._condition:
+            self._prefetched -= 1
+            self._condition.notify()
+        self.last_request = dict(request, spoken_text=text)
+        self._playing = self._starting = True
+        try:
+            self.player.play(path, volume)
+            self.speech_started.emit(text)
+        except Exception as exc:
+            self.error = str(exc)
+            self.stop()
+            self.failed.emit(self.error)
+        finally:
+            self._starting = False
+        if not self.busy and self._playing:
+            self.stage = "playing"
+
+    def _playback_state(self, state):
+        if state == QMediaPlayer.PlaybackState.StoppedState and self._playing and not self._starting:
+            self._playing = False
+            self._finishing = True
+            token = self.generation
+            # 同一轮事件中的解码错误优先取消队列，不能误播下一句。
+            QTimer.singleShot(0, lambda: self._after_playback(token))
+
+    def _after_playback(self, token):
+        if token == self.generation and not self._closed:
+            self._finishing = False
+            self._play_next()
+            self.changed.emit()
+
+    def _playback_error(self, _error, message):
+        if self._playing or self._finishing or self._pending or self._ready:
+            self.error = message or "音频播放失败"
+            self.stop()
+            self.failed.emit(self.error)
+
+    def _finish_if_idle(self):
+        if not self.busy and not self._ready and not self._playing and not self._finishing:
+            if not self._stream_open:
+                self._stream = None
+            self.stage = "waiting" if self._stream_open else "idle"
 
     def _stage(self, generation, stage):
         if not self._closed and generation == self.generation and self.busy:
@@ -322,7 +412,13 @@ class TTSManager(QObject):
     def stop(self):
         self.generation += 1
         with self._condition:
-            self._job = None
+            self._jobs.clear()
+            self._prefetched = 0
+            self._condition.notify()
+        self._ready.clear()
+        self._pending = self._sequence = 0
+        self._stream = self._stream_language = None
+        self._stream_open = self._playing = self._finishing = False
         self.busy = False
         self.stage = "idle"
         self.player.stop()

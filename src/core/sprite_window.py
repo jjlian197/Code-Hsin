@@ -14,7 +14,7 @@ from src.core.voice_player import LocalVoicePlayer
 from src.core.tts_manager import TTSManager
 from src.core.stt_manager import STTManager
 from src.core.voice_phrases import TOUCH_REPLIES, PREVIEW_PHRASES
-from src.core.chat_manager import ChatManager, spoken_reply
+from src.core.chat_manager import ChatManager
 from src.core.chat_backends import PROVIDERS
 from src.ui.app_icon import create_icon
 from src.ui.background_frame import BackgroundFrame
@@ -60,10 +60,15 @@ class HsinSpriteWindow(QMainWindow):
         self.tts.changed.connect(self._sync_microphone)
         self.voice_player.player.playbackStateChanged.connect(self._sync_microphone)
         self.chat_dialog = None
+        self._speech_chat_generation = self.chat.generation
+        self._speech_token = None
+        self.chat.changed.connect(self._sync_chat_speech)
+        self.chat.sentence_ready.connect(self._chat_sentence)
+        self.chat.speech_finished.connect(self._chat_speech_finished)
         self.chat.reply_ready.connect(self._chat_reply)
         self._chat_language = self.tts.language
         self.tts.changed.connect(self._sync_chat_language)
-        self.tts.speech_started.connect(lambda text: self.show_message(text, 8000))
+        self.tts.speech_started.connect(self._show_spoken_text)
         self.tts.failed.connect(lambda error: self.show_message(error[:500], 8000))
         self._last_spoken_touch = 0
         if self.sprite_view.renderer_name == "pmx":
@@ -268,6 +273,35 @@ class HsinSpriteWindow(QMainWindow):
             self._chat_language = self.tts.language
             self.chat.stop()
 
+    def _sync_chat_speech(self):
+        if self._speech_chat_generation == self.chat.generation:
+            return
+        self._speech_chat_generation = self.chat.generation
+        self._speech_token = None
+        self.tts.stop()
+        if self.chat.busy and self.tts.enabled and self.tts.snapshot()["configured"]:
+            self._speech_token = self.tts.begin_stream(self.chat.last_request["language"])
+
+    def _chat_sentence(self, generation, text, language):
+        if generation == self._speech_chat_generation and self._speech_token is not None:
+            self.tts.enqueue_sentence(self._speech_token, text, language)
+
+    def _chat_speech_finished(self, generation, success):
+        if generation != self._speech_chat_generation or self._speech_token is None:
+            return
+        if success:
+            self.tts.finish_stream(self._speech_token)
+        else:
+            self.tts.stop()
+        self._speech_token = None
+
+    def _show_spoken_text(self, text):
+        if self.tts.last_request and self.tts.last_request.get("stream"):
+            full = self.chat.partial or (self.chat.snapshot()["reply"] or text)
+            self.show_message(full[:2000], 12000)
+        else:
+            self.show_message(text, 8000)
+
     def _sync_companion(self, *_):
         if self.sprite_view.renderer_name != "pmx":
             return
@@ -303,7 +337,7 @@ class HsinSpriteWindow(QMainWindow):
     def _sync_microphone(self, *_):
         from PyQt6.QtMultimedia import QMediaPlayer
         speaking = self.voice_player.player.playbackState() != QMediaPlayer.PlaybackState.StoppedState
-        self.stt.set_blocked(self.chat.busy or self.tts.snapshot()["synthesizing"] or speaking)
+        self.stt.set_blocked(self.chat.busy or self.tts.snapshot()["active"] or speaking)
 
     def toggle_microphone(self, enabled):
         self._sync_microphone()
@@ -351,7 +385,6 @@ class HsinSpriteWindow(QMainWindow):
         self.chat_dialog.open_near(self)
 
     def send_chat(self, text, language=None):
-        self.tts.stop()
         return self.chat.send(text, self.tts.language if language is None else language)
 
     def stop_chat(self):
@@ -360,9 +393,6 @@ class HsinSpriteWindow(QMainWindow):
 
     def _chat_reply(self, text, language):
         self.show_message(text[:2000], 12000)
-        speech = spoken_reply(text)
-        if speech and self.tts.enabled and self.tts.snapshot()["configured"]:
-            self.tts.speak(speech, language, translate=False)
 
     def show_sprite(self):
         self.show()

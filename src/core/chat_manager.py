@@ -8,6 +8,7 @@ import threading
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from src.core.app_config import project_path
 from src.core.chat_backends import PROVIDERS, make_backend
+from src.core.speech_stream import SentenceStream
 
 
 class ChatManager(QObject):
@@ -16,6 +17,8 @@ class ChatManager(QObject):
     progress = pyqtSignal(int, str)
     completed = pyqtSignal(int, object, object)
     reply_ready = pyqtSignal(str, str)
+    sentence_ready = pyqtSignal(int, str, str)
+    speech_finished = pyqtSignal(int, bool)
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -33,6 +36,7 @@ class ChatManager(QObject):
         self.last_request, self.future = None, None
         self.backends = {}
         self.closed = False
+        self.speech = SentenceStream()
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run, name="HsinChat", daemon=True)
         self.thread.start()
@@ -56,7 +60,9 @@ class ChatManager(QObject):
 
     def snapshot(self):
         return {"provider": self.provider, "providers": list(PROVIDERS), "busy": self.busy,
-                "last_request": self.last_request, "error": self.error, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == "心" else None}
+                "last_request": self.last_request, "error": self.error, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == "心" else None,
+                "speech": {"limit": self.speech.limit, "emitted_characters": self.speech.spoken_chars,
+                           "final_revised": self.speech.revised}}
 
     def configure(self, provider):
         if provider not in PROVIDERS:
@@ -82,6 +88,7 @@ class ChatManager(QObject):
         self.generation += 1
         generation, provider = self.generation, self.provider
         self.busy, self.error, self.partial = True, None, ""
+        self.speech = SentenceStream()
         self.last_request = {"id": generation, "text": text.strip(), "language": language, "provider": provider}
         self.messages.append(("御者", text.strip()))
         self.messages = self.messages[-24:]
@@ -114,8 +121,10 @@ class ChatManager(QObject):
                 self.completed.emit(generation, None, detail)
 
     def _progress(self, generation, chunk):
-        if not self.closed and generation == self.generation:
+        if not self.closed and self.busy and generation == self.generation:
             self.partial = (self.partial + chunk)[-20000:]
+            for sentence in self.speech.feed(chunk):
+                self.sentence_ready.emit(generation, sentence, self.last_request["language"])
             self.updated.emit()
 
     def _complete(self, generation, result, error):
@@ -125,9 +134,13 @@ class ChatManager(QObject):
         if result:
             reply, language = result
             self.messages.append(("心", reply))
+            for sentence in self.speech.finish(reply):
+                self.sentence_ready.emit(generation, sentence, language)
+            self.speech_finished.emit(generation, not self.speech.revised)
             self.reply_ready.emit(reply, language)
         elif error:
             self.messages.append(("连接提示", error))
+            self.speech_finished.emit(generation, False)
         self.changed.emit()
         self.updated.emit()
 

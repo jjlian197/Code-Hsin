@@ -58,6 +58,53 @@ class QtWindowTestCase(unittest.TestCase):
             time.sleep(0.003)
 
 class DesktopTest(QtWindowTestCase):
+    def test_stream_starts_before_final_and_dialog_can_stop_queued_speech(self):
+        from unittest.mock import patch
+        from PyQt6.QtMultimedia import QMediaPlayer
+        from src.ui.chat_dialog import ChatDialog
+        release = threading.Event()
+        class Backend:
+            async def chat(self, text, language, delta):
+                await delta("第一句。")
+                while not release.is_set():
+                    await asyncio.sleep(.005)
+                await delta("第二句。")
+                return "第一句。第二句。末句"
+        self.window.tts.profiles_path.write_text("{}")
+        self.window.tts.provider.synthesize = lambda text, *_: Path(self.temp.name) / (text + ".wav")
+        played = []
+        with patch("src.core.chat_manager.make_backend", return_value=Backend()), patch.object(self.window.voice_player, "play", side_effect=lambda path, *_: played.append(path.stem)):
+            self.window.send_chat("测试分句")
+            for _ in range(100):
+                self.wait(.01)
+                if played:
+                    break
+            self.assertEqual(played, ["第一句。"])
+            self.assertTrue(self.window.chat.busy, "第一句必须在后端完整回复前播放")
+            token = self.window.tts.generation
+            with self.assertRaises(ValueError):
+                self.window.send_chat("忙碌期间的请求")
+            self.assertEqual(self.window.tts.generation, token, "被拒绝的新请求不能停止当前朗读")
+            release.set()
+            for _ in range(100):
+                self.wait(.01)
+                if not self.window.chat.busy and not self.window.tts.busy:
+                    break
+            self.assertFalse(self.window.chat.busy)
+            self.assertEqual([r[1] for r in self.window.chat.messages if r[0] == "心"], ["第一句。第二句。末句"])
+            self.assertEqual(len(self.window.tts._ready), 2)
+            self.window.voice_player.player.playbackStateChanged.emit(QMediaPlayer.PlaybackState.StoppedState)
+            self.wait(.01)
+            self.assertEqual(played, ["第一句。", "第二句。"])
+            dialog = ChatDialog(self.window)
+            self.assertTrue(dialog.stop_button.isEnabled(), "全文收到后仍可停止剩余语音")
+            dialog.stop_button.click()
+            self.wait(.01)
+            self.assertEqual(played, ["第一句。", "第二句。"])
+            self.assertFalse(self.window.tts.snapshot()["active"])
+            self.assertFalse(dialog.stop_button.isEnabled())
+            dialog.deleteLater()
+
     def test_transparency_and_independent_model_paths(self):
         self.assertTrue(self.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
         self.assertTrue(self.window.windowFlags() & Qt.WindowType.FramelessWindowHint)

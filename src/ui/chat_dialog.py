@@ -38,6 +38,7 @@ class ChatDialog(QDialog):
         owner.stt.changed.connect(self.refresh_microphone)
         owner.chat.changed.connect(self.refresh)
         owner.chat.updated.connect(self.refresh)
+        owner.tts.changed.connect(self.refresh)
         self.refresh()
         self.refresh_microphone()
 
@@ -67,7 +68,7 @@ class ChatDialog(QDialog):
         if at_end:
             bar.setValue(bar.maximum())
         self.send_button.setEnabled(not chat.busy)
-        self.stop_button.setEnabled(chat.busy)
+        self.stop_button.setEnabled(chat.busy or self.owner.tts.snapshot()["active"])
 
     def open_near(self, owner):
         self.move(max(0, owner.x() - self.width() - 12), max(0, owner.y()))
