@@ -1,3 +1,5 @@
+v1.2.0更新：Whisper入口与依赖已移除，使用Qwen独立环境和模型；默认动作随包提供，大模型仍独立部署。
+
 # 发行配置与后端规划
 
 更新：2026-10-03。v1.1.0 已接入统一设置、首次启动引导、Windows EXE、预存中日语音和 GPT-SoVITS 配置模板；可选托管网关等仍是计划，不代表已经部署云服务。
@@ -76,7 +78,7 @@ Hermes 的电脑操作能力继续留在本机。云端返回回复并不自动�
 
 基本设置只放连接方式、语言、音色和麦克风设备；端口、数据目录、模型名、手动会话凭据放高级设置。每项功能显示“可用/缺资源/缺凭据/服务未启动”，并提供对应导入或连接操作。
 
-离线模式需关闭自动翻译、Edge 回退和云 ASR，使用本地音色与 Whisper；聊天还需要 Agent 配置本地模型。当前 `voice.fallback` 与 STT 自动选择可能使用云端，发行界面需要说明实际数据去向，不能把“首选本地”显示成“保证离线”。
+离线模式需关闭自动翻译、Edge 回退和云 ASR，使用本地音色与Qwen ASR；聊天还需要 Agent 配置本地模型。当前 `voice.fallback` 与 STT 自动选择可能使用云端，发行界面需要说明实际数据去向，不能把“首选本地”显示成“保证离线”。
 
 ## 下一步顺序与验收
 
@@ -87,4 +89,4 @@ Hermes 的电脑操作能力继续留在本机。云端返回回复并不自动�
 
 本次仅整理依赖与计划，未更改运行配置、密钥、端口或 v1.0.0 发布物。依据代码：`src/core/app_config.py`、`chat_backends.py`、`hermes_bridge.py`、`voice_auxiliary.py`、`speech_recognizer.py`、`tts_manager.py`、`tools/hsin_voice_server.py`。
 
-外部说明：[DeepSeek API 认证](https://api-docs.deepseek.com/api/deepseek-api/)、[edge-tts 项目](https://github.com/rany2/edge-tts)。智谱云接口与热词按项目当前实现记录，当前自动选择日语仍走本地 Whisper。
+外部说明：[DeepSeek API 认证](https://api-docs.deepseek.com/api/deepseek-api/)、[edge-tts 项目](https://github.com/rany2/edge-tts)。智谱云接口与热词按项目当前实现记录，当前自动选择日语仍走本地Qwen ASR。

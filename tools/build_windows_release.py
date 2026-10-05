@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default='1.1.0')
+    parser.add_argument('--version', default='1.2.0')
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args()
     if not all(part.isdigit() for part in args.version.split('.')) or len(args.version.split('.')) != 3:
@@ -30,14 +30,21 @@ def main():
     shutil.copyfile(ROOT / 'docs/WINDOWS_EXE.md', folder / '使用说明.md')
     shutil.copyfile(ROOT / 'docs/RELEASE_NOTES.md', folder / '发布说明.md')
     shutil.copyfile(ROOT / 'docs/DEPENDENCY_LICENSES.md', folder / '第三方说明.md')
+    shutil.copyfile(ROOT / 'docs/LOCAL_SETUP.md', folder / '本地部署说明.md')
+    shutil.copyfile(ROOT / 'docs/SIDE_LYING_TRANSITION_PLAN.md', folder / '侧躺过渡说明.md')
     shutil.copyfile(ROOT / 'LICENSE', folder / 'LICENSE')
     shutil.copyfile(ROOT / 'docs/GPT_SOVITS_SETUP.md', folder / 'GPT-SoVITS部署说明.md')
     shutil.copytree(ROOT / 'voice/config-templates', folder / 'voice/config-templates', dirs_exist_ok=True)
     forbidden = {'config.local.yaml', 'profiles.json', 'model.bin', 'pytorch_model.bin'}
+    allowed_motion = Path('_internal/src/assets/motions/side_lying.fbx')
     for file in folder.rglob('*'):
-        if file.is_file() and (file.name in forbidden or file.suffix.lower() in {'.pmx', '.ckpt', '.pth', '.safetensors', '.fbx'}
+        if file.is_file() and (file.name in forbidden or file.suffix.lower() in {'.pmx', '.ckpt', '.pth', '.safetensors'}
+                              or file.suffix.lower() == '.fbx' and file.relative_to(folder) != allowed_motion
                               or '.runtime' in file.relative_to(folder).parts):
             raise ValueError(f'发行包包含应排除的资源：{file.relative_to(folder)}')
+    for motion in ('side_lying.fbx', 'first.json', 'second.json'):
+        if not (folder / '_internal/src/assets/motions' / motion).is_file():
+            raise ValueError(f'发行包缺少默认动作：{motion}')
     releases = ROOT / 'release'
     releases.mkdir(exist_ok=True)
     archive = releases / f'Code-Hsin-v{args.version}-windows-x64.zip'

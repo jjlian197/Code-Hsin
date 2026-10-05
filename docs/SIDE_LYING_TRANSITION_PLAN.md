@@ -38,7 +38,7 @@
 
 ## 在新环境重建
 
-原 PMX、用户 FBX、CMU 源文件和按私有模型生成的产物仅保留本机。源码包含转换工具；按配置放好模型和 FBX 后执行：
+v1.2.0按用户要求内置默认FBX及双形态过渡于`src/assets/motions/`，便携版默认配置已指向这些资源。PMX和CMU源文件不分发。默认过渡带原PMX校验；新模型或修改后的模型必须重新生成，不能移除哈希检查强行套用。源码包含转换工具；按配置放好模型和FBX后执行：
 
 ```powershell
 python -m pip install -r requirements-motion.txt

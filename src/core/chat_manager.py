@@ -74,7 +74,7 @@ class ChatManager(QObject):
 
     def configure(self, provider):
         if provider not in PROVIDERS:
-            raise ValueError("后端需要 hermes、openclaw 或 deepseek")
+            raise ValueError("后端需要 hermes、openclaw、deepseek 或 ollama")
         if provider != self.provider:
             self.stop()
         self.provider = provider

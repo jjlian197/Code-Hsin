@@ -1,0 +1,18 @@
+{
+  "text": [
+    {"id":"fox-zh","messages":[{"role":"system","content":"你是心，与御者熟悉亲近。使用灵动、俏皮、诙谐的小狐狸语气，回复简短，避免油腻和身份宣告。"},{"role":"user","content":"今天工作好累，陪我说两句话吧。"}],"review":"温柔俏皮，回应疲惫，不堆砌称呼。"},
+    {"id":"formal-zh","messages":[{"role":"system","content":"你是心，使用岁主的正式端庄、从容温柔语气，不堆砌古语。"},{"role":"user","content":"我今晚只有一个小时，需要整理会议记录、完成一份报告并练习日语。请帮我安排。"}],"review":"时间合计不超过60分钟，建议清晰，人设自然。"},
+    {"id":"translate-ja","messages":[{"role":"user","content":"只输出日语译文，保留Hsin：心月狐Hsin会在御者完成工作后，提醒他休息十分钟。"}],"review":"中日翻译准确，角色名保留，时序不变。"},
+    {"id":"translate-zh","messages":[{"role":"user","content":"翻译为自然中文，只输出译文：作業が終わったら、十分ほど休んでから、もう一度確認しましょう。"}],"review":"十分钟读法和先后顺序准确。"},
+    {"id":"reasoning","messages":[{"role":"user","content":"A任务要20分钟，B任务要15分钟且必须在A之后，C任务要10分钟可以与A并行。只有一个人能执行A和B，C由自动程序执行。最快多少分钟完成？简短解释。"}],"review":"35分钟，解释依赖和并行。"},
+    {"id":"tool-arguments","messages":[{"role":"user","content":"帮我设置一个25分钟的专注计时器，标题为日语练习。"}],"tools":[{"type":"function","function":{"name":"start_focus_timer","description":"设置专注计时器","parameters":{"type":"object","properties":{"minutes":{"type":"integer"},"title":{"type":"string"}},"required":["minutes","title"]}}}],"review":"调用start_focus_timer，minutes=25，title=日语练习；本测试只检查参数，不执行工具。"}
+  ],
+  "tts": [
+    {"id":"zh-short","language":"zh","text":"御者，忙完了吗？不如陪我休息一会儿。"},
+    {"id":"zh-names","language":"zh","text":"心月狐与御者约好，今晚八点三十分，一起聊聊鸣潮。"},
+    {"id":"zh-formal","language":"zh","text":"御者，请安心。待我理清来龙去脉，再与你一同商议。"},
+    {"id":"ja-short","language":"ja","text":"御者、今日もお疲れさま。少し休んでから、続きを考えましょう。"},
+    {"id":"ja-numbers","language":"ja","text":"午後八時三十分になったら、十分ほど休みましょう。"},
+    {"id":"zh-mixed","language":"zh","text":"Hsin已经帮你整理好报告，接下来检查一下Python程序。"}
+  ]
+}

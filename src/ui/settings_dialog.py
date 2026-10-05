@@ -162,14 +162,16 @@ class SettingsDialog(QDialog):
     def connection_page(self):
         form = self.page("连接")
         self.field(form, "chat.enabled", "启用 AI 对话", check=True)
-        self.field(form, "chat.provider", "连接方式", choices=(("Hermes · 本地 Agent", "hermes"), ("DeepSeek · 云端直连", "deepseek"), ("OpenClaw · 预留接口", "openclaw")))
+        self.field(form, "chat.provider", "连接方式", choices=(("Hermes · 本地 Agent", "hermes"), ("DeepSeek · 云端直连", "deepseek"), ("Qwen · 本机聊天（实验）", "ollama"), ("OpenClaw · 预留接口", "openclaw")))
+        self.field(form, "chat.ollama.url", "本机Ollama地址")
+        self.field(form, "chat.ollama.model", "已安装的Qwen模型")
         self.field(form, "chat.hermes.profile", "Hermes Agent 名称")
         self.field(form, "chat.deepseek.api_key", "DeepSeek Key", secret=True).setPlaceholderText("直连聊天及自动翻译共用；支持环境变量")
         self.field(form, "chat.reply_length", "回复长度", choices=tuple((label, key) for key, label in REPLY_LENGTHS.items()))
         self.field(form, "chat.speech_scope", "自动朗读范围", choices=tuple((label, key) for key, label in SPEECH_SCOPES.items()))
         self.field(form, "chat.speech_sentence_count", "前几句", integer=(1, 30))
         self.field(form, "chat.speech_prefix_chars", "前几字（保留完整分段）", integer=(50, 10000))
-        form.addRow(self.note("Hermes 默认自动发现本机服务，需先配置心的 Agent。DeepSeek 会发送聊天文字；基础陪伴可关闭 AI 对话。OpenClaw 暂未联调。"))
+        form.addRow(self.note("Qwen实验入口复用本机已有模型，需先启动Ollama；聊天及自动翻译使用本机模型，目前不执行工具。语音和听写引擎仍需单独选择。Hermes需先配置心的Agent；DeepSeek使用云端。"))
         self.connection_status = self.note("")
         form.addRow(self.connection_status)
 
@@ -177,11 +179,11 @@ class SettingsDialog(QDialog):
         form = self.page("语音")
         self.field(form, "voice.enabled", "开启语音", check=True)
         self.field(form, "voice.language", "回复语言", choices=(("中文", "zh"), ("日本語", "ja")))
-        self.field(form, "voice.provider", "音色", choices=(("心 · 本地 GPT-SoVITS", "gptsovits"), ("通用女声 · Edge（联网）", "edge")))
+        self.field(form, "voice.provider", "音色", choices=(("心 · 本地 GPT-SoVITS", "gptsovits"), ("心 · Qwen（本机实验）", "qwen"), ("通用女声 · Edge（联网）", "edge")))
         self.field(form, "voice.volume", "音量", decimal=(0, 1))
-        self.field(form, "voice.auto_translate", "自动翻译直接朗读的文本（使用 DeepSeek）", check=True)
+        self.field(form, "voice.auto_translate", "自动翻译直接朗读的文本", check=True)
         self.field(form, "voice.fallback", "合成失败尝试备用音色（可能联网）", check=True)
-        form.addRow(self.note("内置固定台词可离线播放；任意新句使用心的音色需要 GPT-SoVITS 和 CUDA 环境。Edge 无需 Key，但会发送待朗读文字，属于通用音色。聊天按回复语言生成，不重复翻译。"))
+        form.addRow(self.note("Qwen使用已准备的独立环境：中文微调音色、日文Base参考原声。Qwen失败不会转用云端音色。GPT-SoVITS继续保留；Edge会发送待朗读文字。聊天按回复语言生成，不重复翻译。"))
         self.voice_status = self.note("")
         form.addRow(self.voice_status)
 
@@ -190,10 +192,8 @@ class SettingsDialog(QDialog):
         devices = [("系统默认输入", "")] + [(d["name"], d["id"]) for d in self.owner.stt.devices()]
         self.field(form, "stt.device", "输入设备", choices=devices)
         self.field(form, "stt.language", "识别语言", choices=(("中文", "zh"), ("日本語", "ja"), ("自动检测", "auto")))
-        self.field(form, "stt.provider", "识别方式", choices=(("自动选择", "auto"), ("本地 Whisper（离线）", "whisper"), ("智谱（联网）", "zhipu")))
+        self.field(form, "stt.provider", "识别方式", choices=(("自动选择", "auto"), ("Qwen ASR（本机）", "qwen"), ("智谱（联网）", "zhipu")))
         self.field(form, "stt.zhipu.api_key", "智谱 Key", secret=True).setPlaceholderText("本地识别可留空；支持环境变量")
-        self.field(form, "stt.model_path", "Whisper 模型文件夹", browse="directory").setPlaceholderText("留空使用已下载的 base 模型")
-        self.field(form, "stt.fallback", "云识别失败时尝试本地 Whisper", check=True)
         words = QPlainTextEdit("\n".join(self.value("stt.hotwords", [])))
         words.setMaximumHeight(100)
         self.fields["stt.hotwords"] = words
@@ -223,6 +223,16 @@ class SettingsDialog(QDialog):
 
     def advanced_page(self):
         form = self.page("高级")
+        self.field(form, "runtime.model_idle_seconds", "本地听写与音色闲置释放（秒，0关闭）", integer=(0, 3600))
+        form.addRow(self.note("默认保温10分钟，等回复、识别、合成与播放结束后释放；下次使用需重新加载。"))
+        for key, label, browse in (("stt.qwen.python", "Qwen听写Python程序", "Python (*.exe)"),
+            ("stt.qwen.model", "Qwen听写模型目录", "directory"), ("voice.qwen.python", "Qwen语音Python程序", "Python (*.exe)"),
+            ("voice.qwen.zh_model", "Qwen中文微调模型目录", "directory"), ("voice.qwen.ja_model", "Qwen日文Base目录", "directory")):
+            self.field(form, key, label, browse=browse)
+        self.field(form, "stt.qwen.gpu", "Qwen听写设备（4080、8gb、cpu或UUID）")
+        self.field(form, "voice.qwen.gpu", "Qwen语音设备（4080、8gb、cpu或UUID）")
+        self.field(form, "chat.ollama.thinking", "本机模型开启思考（回复可能更慢）", check=True)
+        self.field(form, "chat.ollama.context_length", "本机模型上下文预算", integer=(2048, 32768))
         for key, title, browse in (("chat.hermes.home", "Hermes 数据目录", "directory"),
             ("chat.hermes.url", "Hermes 地址（留空自动发现）", None),
             ("chat.hermes.token", "Hermes 会话凭据（通常留空）", None),
@@ -272,7 +282,7 @@ class SettingsDialog(QDialog):
         else:
             for key in ("voice.enabled", "voice.auto_translate", "voice.fallback"):
                 self.fields[key].setChecked(False)
-            self.fields["stt.provider"].setCurrentIndex(self.fields["stt.provider"].findData("whisper"))
+            self.fields["stt.provider"].setCurrentIndex(self.fields["stt.provider"].findData("qwen"))
         self.tabs.setCurrentIndex(1)
 
     def advance(self):
@@ -294,12 +304,16 @@ class SettingsDialog(QDialog):
         ledger = project_path(chat["hermes"]["home"]) / "spawn-ledger.json"
         self.connection_status.setText("DeepSeek：" + ("已配置凭据（未发起网络验证）" if key else "未配置 Key") +
             "\nHermes：" + ("发现服务登记（实际连接需启动服务）" if ledger.is_file() else "未发现服务登记，请先打开 Hermes，或填写高级地址"))
-        self.voice_status.setText("自动翻译：" + ("凭据已配置" if key else "需要 DeepSeek Key，可关闭") +
-            "\n本地音色：" + self.voice_readiness(data["voice"]["profiles"]) +
+        voice = data["voice"]
+        qwen_voice_ready = all(project_path(voice["qwen"][name]).exists() for name in ("python", "zh_model", "ja_model"))
+        self.voice_status.setText("自动翻译：" + ("使用本机Qwen" if chat["provider"] == "ollama" else "凭据已配置" if key else "需要 DeepSeek Key，可关闭") +
+            "\n本地音色：" + (("Qwen资源已找到，实际合成需运行验证" if qwen_voice_ready else "Qwen运行环境或模型缺失") if voice["provider"] == "qwen" else self.voice_readiness(voice["profiles"])) +
             ("\n已内置中日固定语音；新句仍需推理环境或 Edge。" if self.owner.tts.provider.presets.available() else ""))
         stt = data["stt"]
-        self.microphone_status.setText("当前识别选择：" + ("智谱（上传短句）" if SpeechRecognizer.provider(stt) == "zhipu" else "本地 Whisper") +
-            "\n本地组件：" + ("已安装；还需已下载模型" if SpeechRecognizer.local_available() else "未安装本地识别组件"))
+        provider = SpeechRecognizer.provider(stt)
+        qwen_ready = project_path(stt["qwen"]["python"]).is_file() and (project_path(stt["qwen"]["model"]) / "config.json").is_file()
+        self.microphone_status.setText("当前识别选择：" + {"zhipu": "智谱（上传短句）", "qwen": "本机Qwen ASR"}[provider] +
+            "\n本地组件：" + (("Qwen环境与模型已找到" if qwen_ready else "Qwen环境或模型缺失") if provider == "qwen" else "智谱需配置Key"))
         resources = [("一阶段模型", data["sprite"].get("model", {}).get("forms", {}).get("first", "")),
                      ("二阶段模型", data["sprite"].get("model", {}).get("forms", {}).get("second", ""))]
         self.resource_status.setText("\n".join(label + "：" + ("文件存在（重启后加载验证）" if path and project_path(path).is_file() else "未找到，可选择本地文件") for label, path in resources))

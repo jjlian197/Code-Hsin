@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import yaml
@@ -46,6 +46,105 @@ class SettingsTest(unittest.TestCase):
         dialog = SettingsDialog(self.window, **kwargs)
         self.dialogs.append(dialog)
         return dialog
+
+    def test_idle_release_waits_for_generation_queue_and_real_worker(self):
+        import time
+        idle = self.window.voice_idle
+        self.window.config['runtime']['model_idle_seconds'] = 1
+        worker = Mock()
+        self.window.stt._recognizer._qwen = worker
+        self.window.tts.provider.process = Mock()
+        def release_asr():
+            worker.process = None
+            return True
+        def release_tts():
+            self.window.tts.provider.process = None
+            return True
+        with patch.object(self.window.stt._recognizer, 'release_idle', side_effect=release_asr) as asr, patch.object(self.window.tts.provider, 'release_idle', side_effect=release_tts) as tts:
+            for target, name in ((self.window.chat, 'busy'), (self.window.stt, 'busy'), (self.window.tts, '_stream_open'), (self.window.tts, '_playing')):
+                setattr(target, name, True)
+                idle.since = time.monotonic() - 10
+                idle.tick()
+                asr.assert_not_called(); tts.assert_not_called()
+                setattr(target, name, False)
+            self.window.tts._ready.append(None)
+            idle.since = time.monotonic() - 10
+            idle.tick()
+            asr.assert_not_called()
+            self.window.tts._ready.clear()
+            self.window.tts.model_work_active.set()
+            idle.since = time.monotonic() - 10
+            idle.tick()
+            asr.assert_not_called()
+            self.window.tts.model_work_active.clear()
+            idle.since = time.monotonic() - 10
+            self.window.tts.warmup_state = 'ready'
+            idle.tick()
+            deadline = time.monotonic() + 3
+            while idle.release_count != 1 and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.01)
+            self.assertEqual(idle.release_count, 1)
+            self.assertEqual(idle.last_release, {'asr': True, 'gptsovits': True})
+            self.assertEqual(self.window.tts.warmup_state, 'idle')
+            self.window.config['runtime']['model_idle_seconds'] = 0
+            idle.since = time.monotonic() - 100
+            idle.tick()
+            self.assertEqual(asr.call_count, 1)
+
+    def test_menu_backend_and_restored_backend_update_translation_route(self):
+        self.window.set_chat_provider("ollama")
+        self.assertEqual(self.window.tts.translator.config["chat"]["provider"], "ollama")
+        restored = HsinSpriteWindow(load_config(self.source))
+        try:
+            self.assertEqual(restored.chat.provider, "ollama")
+            self.assertEqual(restored.tts.translator.config["chat"]["provider"], "ollama")
+        finally:
+            restored.cleanup()
+            restored.deleteLater()
+
+    def test_connection_dialog_saves_to_isolated_configuration(self):
+        from src.ui.connection_dialog import ConnectionDialog
+        dialog = ConnectionDialog(self.window)
+        self.dialogs.append(dialog)
+        dialog.fields["ollama", "url"].setText("http://127.0.0.1:11435")
+        dialog.save()
+        saved = yaml.safe_load(self.local.read_text(encoding="utf8"))
+        self.assertEqual(saved["chat"]["ollama"]["url"], "http://127.0.0.1:11435")
+        self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+
+    def test_qwen_language_warmup_runs_after_old_chat_cleanup(self):
+        import threading
+        import time
+        calls = []
+        ready = threading.Event()
+        def warmup(language):
+            calls.append(language)
+            ready.set()
+        with patch.object(self.window.tts.qwen, "available", return_value=True), patch.object(self.window.tts.qwen, "warmup", side_effect=warmup):
+            self.window.tts.configure(provider="qwen", enabled=True)
+            self.window.tts.prewarm()
+            self.assertTrue(ready.wait(2))
+            deadline = time.monotonic() + 2
+            while self.window.tts.warmup_state != "ready" and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.005)
+            ready.clear()
+            self.window.tts.configure(language="ja")
+            self.assertTrue(ready.wait(2), "新语言预热应排在窗口停止旧聊天之后")
+            self.assertEqual(calls, ["zh", "ja"])
+
+    def test_qwen_failure_does_not_fall_back_to_cloud_voice(self):
+        import time
+        with patch.object(self.window.tts.qwen, "available", return_value=True), patch.object(self.window.tts.qwen, "synthesize", side_effect=RuntimeError("qwen failed")), patch.object(self.window.tts.edge, "synthesize") as cloud:
+            self.window.tts.configure(provider="qwen", enabled=True, fallback=True)
+            self.window.tts.speak("御者。", translate=False)
+            deadline = time.monotonic() + 2
+            while self.window.tts.error is None and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.005)
+            self.assertIn("qwen failed", self.window.tts.error)
+            cloud.assert_not_called()
 
     def test_first_run_cancel_and_menu_reopen(self):
         self.assertTrue(needs_setup(self.window.config))

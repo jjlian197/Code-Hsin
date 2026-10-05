@@ -47,6 +47,8 @@ class LocalSynthesizer:
         self.base = f"http://127.0.0.1:{port}"
         self.process = None
         self.process_lock = threading.Lock()
+        self.operation_lock = threading.Lock()
+        self.idle_released = False
         self.closed = threading.Event()
         self.presets = PresetVoice()
 
@@ -62,6 +64,7 @@ class LocalSynthesizer:
         if health:
             if health.get("service") != "hsin-gptsovits" or health.get("profile_id") != data["profile_id"]:
                 raise RuntimeError("心的语音端口已被其他配置占用，请更换 voice.port")
+            self.idle_released = False
             return
         with self.process_lock:
             if self.closed.is_set():
@@ -100,6 +103,7 @@ class LocalSynthesizer:
             try:
                 health = self.health()
                 if health.get("service") == "hsin-gptsovits" and health.get("profile_id") == data["profile_id"]:
+                    self.idle_released = False
                     return
                 raise RuntimeError("语音服务身份不匹配")
             except urllib.error.URLError:
@@ -108,6 +112,10 @@ class LocalSynthesizer:
         raise RuntimeError("语音服务启动超时或已退出")
 
     def synthesize(self, text, language, speed):
+        with self.operation_lock:
+            return self._synthesize(text, language, speed)
+
+    def _synthesize(self, text, language, speed):
         preset = self.presets.find(text, language, speed)
         if preset:
             wave_info(preset.read_bytes())
@@ -145,6 +153,10 @@ class LocalSynthesizer:
         return path
 
     def warmup(self, language):
+        with self.operation_lock:
+            self._warmup(language)
+
+    def _warmup(self, language):
         data = json.loads(self.profiles_path.read_text(encoding="utf8"))
         self.ensure_server(data)
         # 独立端点强制做一次推理，不能由磁盘音频缓存代替模型预热。
@@ -157,14 +169,31 @@ class LocalSynthesizer:
 
     def close(self):
         self.closed.set()
+        self._stop_owned_process()
+
+    def _stop_owned_process(self):
         with self.process_lock:
-            if self.process is not None and self.process.poll() is None:
-                self.process.terminate()
+            process, self.process = self.process, None
+            if process is not None and process.poll() is None:
+                process.terminate()
                 try:
-                    self.process.wait(timeout=2)
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self.process.kill()
-                self.process = None
+                    process.kill()
+                    process.wait(timeout=2)
+            return process is not None
+
+    def release_idle(self):
+        # 只释放自己启动的服务；已连接的用户服务不受影响。
+        if not self.operation_lock.acquire(blocking=False):
+            return False
+        try:
+            released = self._stop_owned_process()
+            if released:
+                self.idle_released = True
+            return released
+        finally:
+            self.operation_lock.release()
 
 
 class TTSManager(QObject):
@@ -195,7 +224,7 @@ class TTSManager(QObject):
                 self.language = state["language"]
             if type(state.get("enabled")) is bool:
                 self.enabled = state["enabled"]
-            if state.get("provider") in ("gptsovits", "edge"):
+            if state.get("provider") in ("gptsovits", "edge", "qwen"):
                 self.engine = state["provider"]
             for name in ("auto_translate", "fallback"):
                 if type(state.get(name)) is bool:
@@ -203,6 +232,9 @@ class TTSManager(QObject):
         except (OSError, ValueError):
             pass
         self.provider = LocalSynthesizer(self.profiles_path, self.state_path.parent, voice.get("port", 19880))
+        from src.core.qwen_voice import QwenSynthesizer
+        from src.core.app_config import DEFAULT_CONFIG
+        self.qwen = QwenSynthesizer(voice.get("qwen", DEFAULT_CONFIG["voice"]["qwen"]), self.profiles_path, self.state_path.parent)
         self.edge = EdgeSynthesizer(self.state_path.parent)
         self.translator = VoiceTranslator(config, self.state_path.parent)
         self.generation = 0
@@ -214,6 +246,7 @@ class TTSManager(QObject):
         self.stage = "idle"
         self._closed = False
         self._condition = threading.Condition()
+        self.model_work_active = threading.Event()
         self._jobs = deque()
         self._ready = deque()
         self._pending = self._prefetched = self._sequence = 0
@@ -238,7 +271,7 @@ class TTSManager(QObject):
         self._worker.start()
 
     def snapshot(self):
-        available = {"gptsovits": self.profiles_path.is_file() or self.provider.presets.available(), "edge": self.edge.available()}
+        available = {"gptsovits": self.profiles_path.is_file() or self.provider.presets.available(), "edge": self.edge.available(), "qwen": self.qwen.available()}
         configured = available[self.engine] or (self.fallback and any(available.values()))
         return {"enabled": self.enabled, "configured": configured,
                 "language": self.language, "languages": ["zh", "ja"], "provider": self.engine,
@@ -255,7 +288,7 @@ class TTSManager(QObject):
 
     def prewarm(self):
         self._prewarm_enabled = True
-        if self._closed or not self.profiles_path.is_file():
+        if self._closed or self.engine not in ("gptsovits", "qwen") or not self.snapshot()["configured"]:
             return
         if self._warmup_target == self.language and self.warmup_state in {"warming", "ready"}:
             return
@@ -277,8 +310,8 @@ class TTSManager(QObject):
             raise ValueError("语言需要 zh 或 ja")
         if enabled is not None and type(enabled) is not bool:
             raise ValueError("enabled 需要布尔值")
-        if provider is not None and provider not in ("gptsovits", "edge"):
-            raise ValueError("provider 需要 gptsovits 或 edge")
+        if provider is not None and provider not in ("gptsovits", "edge", "qwen"):
+            raise ValueError("provider 需要 gptsovits、edge 或 qwen")
         for name, value in (("auto_translate", auto_translate), ("fallback", fallback)):
             if value is not None and type(value) is not bool:
                 raise ValueError(name + " 需要布尔值")
@@ -292,7 +325,10 @@ class TTSManager(QObject):
         if enabled is not None:
             self.enabled = enabled
         if provider is not None:
+            if self.engine == "qwen" and provider != "qwen":
+                self.qwen.cancel()
             self.engine = provider
+            self._warmup_target = None
         if auto_translate is not None:
             self.auto_translate = auto_translate
         if fallback is not None:
@@ -302,9 +338,10 @@ class TTSManager(QObject):
         temp.write_text(json.dumps({"language": self.language, "enabled": self.enabled,
             "provider": self.engine, "auto_translate": self.auto_translate, "fallback": self.fallback}), encoding="utf8")
         temp.replace(self.state_path)
+        self.changed.emit()
+        # 语言改变会让窗口停止旧对话，先完成该清理，再排入新语言预热。
         if self._prewarm_enabled:
             self.prewarm()
-        self.changed.emit()
         return self.snapshot()
 
     def speak(self, text, language=None, speed=1.0, volume=None, translate=None):
@@ -377,18 +414,22 @@ class TTSManager(QObject):
                     return
                 if not self._jobs and self._warmup_language is not None:
                     warmup_language, self._warmup_language = self._warmup_language, None
+                    warmup_engine, warmup_generation = self.engine, self.generation
                     job = None
                 else:
                     job = self._jobs.popleft()
                     self._prefetched += 1
+                self.model_work_active.set()
             if job is None:
                 try:
-                    self.provider.warmup(warmup_language)
+                    {"gptsovits": self.provider, "qwen": self.qwen}[warmup_engine].warmup(warmup_language)
                     error = None
                 except Exception as exc:
                     error = str(exc)
                     logger.warning("心的语音后台预热失败：{}", exc)
-                self.warmup_completed.emit(warmup_language, error)
+                if warmup_engine == self.engine and (warmup_engine != "qwen" or warmup_generation == self.generation):
+                    self.warmup_completed.emit(warmup_language, error)
+                self.model_work_active.clear()
                 continue
             generation, text, language, speed, volume, engine, translate, fallback, request = job
             try:
@@ -398,7 +439,7 @@ class TTSManager(QObject):
                     spoken = self.translator.translate(text, language)
                 if self._closed or generation != self.generation:
                     continue
-                providers = {"gptsovits": self.provider, "edge": self.edge}
+                providers = {"gptsovits": self.provider, "edge": self.edge, "qwen": self.qwen}
                 warning = None
                 self.stage_changed.emit(generation, "synthesizing")
                 try:
@@ -406,7 +447,7 @@ class TTSManager(QObject):
                 except Exception as primary_error:
                     if self._closed or generation != self.generation:
                         continue
-                    if not fallback:
+                    if not fallback or engine == "qwen":
                         raise
                     alternate = "edge" if engine == "gptsovits" else "gptsovits"
                     self.stage_changed.emit(generation, "fallback")
@@ -419,9 +460,11 @@ class TTSManager(QObject):
                 if not self._closed and generation == self.generation:
                     self.completed.emit(generation, (path, spoken, volume, engine, warning, request), None)
             except Exception as exc:
-                if not self._closed:
+                if not self._closed and generation == self.generation:
                     logger.warning("心的语音合成失败：{}", exc)
                     self.completed.emit(generation, None, str(exc))
+            finally:
+                self.model_work_active.clear()
 
     def _complete(self, generation, result, error):
         if self._closed or generation != self.generation:
@@ -434,7 +477,8 @@ class TTSManager(QObject):
             self.stop()
             self.failed.emit(self.error)
         elif result:
-            if result[3] == "gptsovits" and result[5]["language"] == self._warmup_target:
+            if (result[3] in ("gptsovits", "qwen") and result[5]["language"] == self._warmup_target
+                    and (result[3] != "gptsovits" or not self.provider.idle_released)):
                 self.warmup_state, self.warmup_error = "ready", None
             self._ready.append(result)
             self._play_next()
@@ -505,8 +549,13 @@ class TTSManager(QObject):
 
     def stop(self):
         self.generation += 1
+        if self.qwen.worker.active.is_set():
+            self.qwen.cancel()
+            self.warmup_state = "idle"
+            self._warmup_target = None
         with self._condition:
             self._jobs.clear()
+            self._warmup_language = None
             self._prefetched = 0
             self._condition.notify()
         self._ready.clear()
@@ -527,4 +576,5 @@ class TTSManager(QObject):
             self._closed = True
             self._condition.notify()
         self.provider.close()
+        self.qwen.close()
         self.edge.close()

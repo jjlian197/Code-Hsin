@@ -19,14 +19,3 @@ def normalize_hotwords(words):
 
 def hotwords(config):
     return normalize_hotwords(config.get("hotwords", DEFAULT_HOTWORDS))
-
-
-def whisper_hotwords(words, tokenizer, budget=96):
-    # 按真实分词长度保留完整词条，给 Whisper 解码留出空间。
-    selected = []
-    for word in normalize_hotwords(words):
-        hint = "、".join([*selected, word])
-        if len(tokenizer.encode(hint).ids) > budget:
-            break
-        selected.append(word)
-    return "、".join(selected) or None

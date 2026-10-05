@@ -11,21 +11,28 @@ RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 DEFAULT_CONFIG = {
     "sprite": {"name": "Hsin", "window": {"width": 400, "height": 600, "opacity": 1.0,
                "always_on_top": True, "click_through": False}, "renderer": "pmx",
-               "model": {"path": "", "forms": {}}},
+               "model": {"path": "", "forms": {}},
+               "animation": {"side_lying": "src/assets/motions/side_lying.fbx",
+                             "transitions": {"first": "src/assets/motions/first.json", "second": "src/assets/motions/second.json"}}},
     "websocket": {"enabled": True, "host": "127.0.0.1", "port": 18765},
     "http": {"enabled": True, "host": "127.0.0.1", "port": 18766},
     "logging": {"level": "INFO", "file": ".runtime/hsin.log"},
-    "runtime": {"directory": ".runtime"},
-    "stt": {"provider": "auto", "language": "zh", "device": "", "model_path": "",
+    "runtime": {"directory": ".runtime", "model_idle_seconds": 600},
+    "stt": {"provider": "qwen", "language": "zh", "device": "",
             "hotwords": list(DEFAULT_HOTWORDS),
-            "silence_ms": 700, "energy_threshold": 250, "fallback": True, "zhipu": {"api_key": ""}},
+            "silence_ms": 700, "energy_threshold": 250, "zhipu": {"api_key": ""},
+            "qwen": {"python": ".runtime/local-model-tests/venv-asr/Scripts/python.exe", "model": ".runtime/local-model-tests/models/qwen3-asr", "gpu": "4080"}},
     "voice": {"manifest": "voice/hsin_zh/selection.json", "profiles": "voice/profiles.json",
               "enabled": False, "language": "zh", "volume": 0.65, "port": 19880,
-              "provider": "gptsovits", "auto_translate": True, "fallback": True},
+              "provider": "gptsovits", "auto_translate": True, "fallback": True,
+              "qwen": {"python": ".runtime/local-model-tests/venv-tts/Scripts/python.exe", "gpu": "4080",
+                       "zh_model": ".runtime/qwen3-tts-training/zh/checkpoint-epoch-3", "ja_model": ".runtime/local-model-tests/models/qwen3-tts"}},
     "chat": {"provider": "hermes", "reply_length": "normal", "speech_scope": "full", "speech_sentence_count": 3, "speech_prefix_chars": 500,
              "hermes": {"home": str(Path.home() / "AppData/Local/hermes"), "url": "", "profile": "default", "token": ""},
              "openclaw": {"url": "ws://127.0.0.1:18789/ws", "agent": "hsin", "token": ""},
-             "deepseek": {"model": "deepseek-v4-flash", "api_key": ""}},
+             "deepseek": {"model": "deepseek-v4-flash", "api_key": ""},
+             "ollama": {"url": "http://127.0.0.1:11434", "model": "huihui_ai/qwen3.5-abliterated:4b",
+                        "thinking": False, "context_length": 4096}},
 }
 
 
@@ -61,6 +68,10 @@ def load_config(path=None):
     local = path.with_name("config.local.yaml")
     if local.exists():
         config = merge_config(config, read_yaml(local))
+    if config["stt"].get("provider") == "whisper":
+        config["stt"]["provider"] = "qwen"
+    config["stt"].pop("model_path", None)
+    config["stt"].pop("fallback", None)
     validate_config(config)
     config["_config_path"] = str(path)
     return config
@@ -112,12 +123,17 @@ def validate_config(config):
         if not isinstance(files, list) or not files or any(not isinstance(f, str) or not f for f in files):
             raise ValueError("VMD 动作组需要非空文件路径列表")
     voice = config["voice"]
+    idle = config.get("runtime", {}).get("model_idle_seconds", 600)
+    if type(idle) is not int or not 0 <= idle <= 3600:
+        raise ValueError("本地语音模型闲置释放需要0–3600秒，0表示关闭")
     if not isinstance(voice, dict):
         raise ValueError("voice 需要配置对象")
     if voice.get("language", "zh") not in ("zh", "ja") or type(voice.get("enabled", False)) is not bool:
         raise ValueError("voice.language 需要 zh/ja，voice.enabled 需要布尔值")
-    if voice.get("provider", "gptsovits") not in ("gptsovits", "edge"):
-        raise ValueError("voice.provider 需要 gptsovits 或 edge")
+    if voice.get("provider", "gptsovits") not in ("gptsovits", "edge", "qwen"):
+        raise ValueError("voice.provider 需要 gptsovits、edge 或 qwen")
+    if voice.get("provider") == "qwen":
+        validate_qwen(voice.get("qwen"), ("python", "zh_model", "ja_model", "gpu"))
     if any(type(voice.get(name, True)) is not bool for name in ("auto_translate", "fallback")):
         raise ValueError("voice.auto_translate / fallback 需要布尔值")
     if type(voice.get("port", 19880)) is not int or not 1 <= voice.get("port", 19880) <= 65535 or voice.get("port", 19880) in ports:
@@ -135,8 +151,8 @@ def validate_config(config):
 def validate_chat_config(chat):
     from src.core.chat_preferences import REPLY_LENGTHS, SPEECH_SCOPES
     from src.core.hermes_bridge import local_url
-    if not isinstance(chat, dict) or chat.get("provider") not in ("hermes", "openclaw", "deepseek"):
-        raise ValueError("chat.provider 需要 hermes、openclaw 或 deepseek")
+    if not isinstance(chat, dict) or chat.get("provider") not in ("hermes", "openclaw", "deepseek", "ollama"):
+        raise ValueError("chat.provider 需要 hermes、openclaw、deepseek 或 ollama")
     if type(chat.get("enabled", True)) is not bool:
         raise ValueError("chat.enabled 需要布尔值")
     if (not isinstance(chat.get("reply_length", "normal"), str) or chat.get("reply_length", "normal") not in REPLY_LENGTHS
@@ -154,3 +170,15 @@ def validate_chat_config(chat):
     if chat["hermes"]["url"]:
         local_url(chat["hermes"]["url"])
     local_url(chat["openclaw"]["url"], ("ws", "wss"))
+    local = chat.get("ollama", {})
+    if not isinstance(local, dict) or any(not isinstance(local.get(key, default), str) or not local.get(key, default).strip()
+            for key, default in (("url", "http://127.0.0.1:11434"), ("model", "huihui_ai/qwen3.5-abliterated:4b"))):
+        raise ValueError("Ollama地址和已有模型名称不能为空")
+    local_url(local.get("url", "http://127.0.0.1:11434"), ("http",))
+    if type(local.get("thinking", False)) is not bool or type(local.get("context_length", 4096)) is not int or not 2048 <= local.get("context_length", 4096) <= 32768:
+        raise ValueError("Ollama思考需要布尔值，上下文需要2048–32768的整数")
+
+
+def validate_qwen(value, fields):
+    if not isinstance(value, dict) or any(not isinstance(value.get(key), str) or not value[key].strip() for key in fields):
+        raise ValueError("Qwen运行环境、模型路径与设备需要非空文字字段")

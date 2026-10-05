@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 from src.core.stt_manager import STTManager, VadSegmenter
 from src.core.speech_recognizer import SpeechRecognizer, wav_bytes
-from src.core.stt_hotwords import DEFAULT_HOTWORDS, normalize_hotwords, whisper_hotwords
+from src.core.stt_hotwords import DEFAULT_HOTWORDS, normalize_hotwords
 
 
 APP = QApplication.instance() or QApplication([])
@@ -74,34 +74,6 @@ class BackendTests(unittest.TestCase):
             backend.transcribe(bytes(640), {**config, "hotwords": []})
             self.assertNotIn("hotwords", post.call_args.kwargs["data"])
 
-    def test_local_process_receives_hotwords(self):
-        import io, json
-        process = Mock()
-        process.poll.return_value = None
-        process.stdin = io.BytesIO()
-        process.stdout = io.BytesIO(b'{"text":"ok"}\n')
-        backend = SpeechRecognizer()
-        try:
-            with patch.object(backend, "local_available", return_value=True), patch("subprocess.Popen", return_value=process):
-                backend.transcribe(bytes(640), {"provider": "whisper", "hotwords": ["心", "心月狐"]})
-            self.assertEqual(json.loads(process.stdin.getvalue())["hotwords"], ["心", "心月狐"])
-        finally:
-            backend.close()
-
-    def test_worker_passes_hint_to_decoder(self):
-        import io, json, base64
-        from types import SimpleNamespace
-        from src.core.stt_worker import main
-        model = Mock()
-        model.hf_tokenizer.encode.side_effect = lambda s: SimpleNamespace(ids=list(s))
-        model.transcribe.return_value = ([SimpleNamespace(text="心月狐")], None)
-        request = {"audio": base64.b64encode(wav_bytes(bytes(640))).decode(), "hotwords": ["心", "心月狐"], "language": "zh"}
-        output = io.StringIO()
-        with patch.dict("sys.modules", {"faster_whisper": SimpleNamespace(WhisperModel=Mock(return_value=model))}), patch("sys.stdin", io.StringIO(json.dumps(request) + "\n")), patch("sys.stdout", output):
-            main()
-        self.assertEqual(model.transcribe.call_args.kwargs["hotwords"], "心、心月狐")
-        self.assertEqual(json.loads(output.getvalue())["text"], "心月狐")
-
     def test_wav_format_and_provider_routing(self):
         import io, wave
         with wave.open(io.BytesIO(wav_bytes(bytes(640))), "rb") as audio:
@@ -110,19 +82,15 @@ class BackendTests(unittest.TestCase):
             config = {"provider": "auto", "language": "zh", "zhipu": {"api_key": "test"}}
             self.assertEqual(SpeechRecognizer.provider(config), "zhipu")
             config["language"] = "ja"
-            self.assertEqual(SpeechRecognizer.provider(config), "whisper")
+            self.assertEqual(SpeechRecognizer.provider(config), "qwen")
 
-    def test_cloud_failure_falls_back_but_empty_result_does_not(self):
+    def test_cloud_failure_does_not_use_removed_backend(self):
         backend = SpeechRecognizer()
-        with patch.object(backend, "_cloud", side_effect=RuntimeError("HTTP 503")), patch.object(backend, "_local", return_value="你好"):
-            result = backend.transcribe(bytes(640), {"provider": "zhipu"})
-            self.assertEqual(result[:2], ("你好", "whisper"))
-            self.assertIn("HTTP 503", result[2])
-            with self.assertRaises(RuntimeError):
-                backend.transcribe(bytes(640), {"provider": "zhipu", "fallback": False})
-        with patch.object(backend, "_cloud", return_value=""), patch.object(backend, "_local") as local:
-            self.assertEqual(backend.transcribe(bytes(640), {"provider": "zhipu"})[0], "")
-            local.assert_not_called()
+        with patch.object(backend, "_cloud", side_effect=RuntimeError("HTTP 503")):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                backend.transcribe(bytes(640), {"provider": "zhipu", "fallback": True})
+        with self.assertRaisesRegex(ValueError, "识别引擎"):
+            backend.transcribe(bytes(640), {"provider": "whisper"})
 
     def test_cloud_http_errors_do_not_expose_response_or_key(self):
         with patch("requests.post", return_value=Mock(status_code=401, text="sensitive")) as post:
@@ -140,7 +108,7 @@ class ManagerTests(unittest.TestCase):
         def recognize(*args):
             self.started.set()
             self.release.wait(2)
-            return "你好", "whisper", ""
+            return "你好", "qwen", ""
         self.backend = Mock()
         self.backend.transcribe.side_effect = recognize
         self.manager = STTManager({"stt": {"language": "zh", "zhipu": {"api_key": "secret"}}}, recognizer=self.backend)
@@ -232,10 +200,3 @@ class HotwordTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     normalize_hotwords(value)
-
-    def test_whisper_token_budget_keeps_whole_words(self):
-        from types import SimpleNamespace
-        tokenizer = Mock()
-        tokenizer.encode.side_effect = lambda s: SimpleNamespace(ids=list(s))
-        self.assertEqual(whisper_hotwords(["心", "心月狐", "御者"], tokenizer, budget=5), "心、心月狐")
-        self.assertIsNone(whisper_hotwords([], tokenizer))

@@ -47,6 +47,7 @@ def save_settings(owner, changes):
     owner.config["setup"] = local["setup"]
     restart = any(previous[name] != candidate[name] for name in ("http", "websocket"))
     restart |= any(previous["voice"][name] != voice[name] for name in ("profiles", "port"))
+    restart |= previous["voice"].get("qwen") != voice.get("qwen")
     restart |= previous["sprite"]["model"] != candidate["sprite"]["model"]
     restart |= previous["sprite"].get("animation", {}) != candidate["sprite"].get("animation", {})
     return restart

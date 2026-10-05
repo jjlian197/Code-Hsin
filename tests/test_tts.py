@@ -2,11 +2,14 @@
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -68,6 +71,38 @@ class VoiceTest(unittest.TestCase):
         manager = TTSManager({"runtime": {"directory": str(self.root)},
             "voice": {"profiles": str(profiles), "enabled": True}}, player)
         return manager, player
+
+    def test_idle_release_preserves_active_request_and_unowned_service(self):
+        voice = LocalSynthesizer(self.root / 'profiles.json', self.root)
+        self.assertFalse(voice.release_idle(), '不会结束非本实例启动的服务')
+        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        voice.process = process
+        try:
+            voice.operation_lock.acquire()
+            try:
+                self.assertFalse(voice.release_idle())
+                self.assertIsNone(process.poll())
+            finally:
+                voice.operation_lock.release()
+            self.assertTrue(voice.release_idle())
+            self.assertIsNotNone(process.poll())
+            self.assertFalse(voice.closed.is_set(), '释放后仍允许下一次加载')
+        finally:
+            voice.close()
+
+    def test_cached_playback_after_idle_release_does_not_claim_model_warm(self):
+        manager, player = self.manager()
+        path = self.root / 'cached.wav'
+        path.write_bytes(sample_wave())
+        manager.provider.idle_released = True
+        manager._warmup_target = 'zh'
+        try:
+            with patch.object(manager.provider, 'synthesize', return_value=path):
+                manager.speak('缓存朗读。', 'zh', translate=False)
+                self.pump(lambda: bool(player.played))
+            self.assertEqual(manager.warmup_state, 'idle')
+        finally:
+            manager.close()
 
     def test_cache_identity_language_weights_reference_and_speed(self):
         original = cache_key("同文", "zh", 1, self.profile)

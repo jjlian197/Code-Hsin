@@ -23,10 +23,10 @@ class MicrophoneDialog(QDialog):
         for name, code in (("中文", "zh"), ("日本語", "ja"), ("自动检测", "auto")):
             self.language.addItem(name, code)
         self.provider = QComboBox()
-        for name, code in (("自动：中文优先智谱，日语本地", "auto"), ("本地 Whisper（离线）", "whisper"), ("智谱 GLM-ASR（联网）", "zhipu")):
+        for name, code in (("Qwen ASR（本地）", "qwen"), ("智谱 GLM-ASR（联网）", "zhipu")):
             self.provider.addItem(name, code)
         config = owner.stt.config
-        for widget, key, default in ((self.device, "device", ""), (self.language, "language", "zh"), (self.provider, "provider", "auto")):
+        for widget, key, default in ((self.device, "device", ""), (self.language, "language", "zh"), (self.provider, "provider", "qwen")):
             value = config.get(key, default)
             index = widget.findData(value)
             if index < 0:
@@ -36,8 +36,6 @@ class MicrophoneDialog(QDialog):
         self.key = QLineEdit(config.get("zhipu", {}).get("api_key", ""))
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setPlaceholderText("可留空使用本地；也支持 ZHIPU_API_KEY 环境变量")
-        self.model_path = QLineEdit(config.get("model_path", ""))
-        self.model_path.setPlaceholderText("留空使用已缓存的 faster-whisper-base")
         self.silence = QSpinBox()
         self.silence.setRange(300, 2000)
         self.silence.setSuffix(" ms")
@@ -45,15 +43,13 @@ class MicrophoneDialog(QDialog):
         self.energy = QSpinBox()
         self.energy.setRange(50, 5000)
         self.energy.setValue(config.get("energy_threshold", 250))
-        self.fallback = QCheckBox("智谱失败时使用本地 Whisper")
-        self.fallback.setChecked(config.get("fallback", True))
         self.hotwords = QPlainTextEdit("\n".join(config["hotwords"]))
         self.hotwords.setMaximumHeight(110)
         self.hotwords.setPlaceholderText("每行一个词；清空可关闭热词提示。最多 100 项，每项 40 字。")
-        for name, widget in (("输入设备", self.device), ("识别语言", self.language), ("识别引擎", self.provider), ("智谱 API Key", self.key), ("本地模型目录", self.model_path), ("说完后的停顿", self.silence), ("底噪门限", self.energy), ("", self.fallback)):
+        for name, widget in (("输入设备", self.device), ("识别语言", self.language), ("识别引擎", self.provider), ("智谱 API Key", self.key), ("说完后的停顿", self.silence), ("底噪门限", self.energy)):
             form.addRow(name, widget)
         form.addRow("识别热词", self.hotwords)
-        note = QLabel("开麦后，说完停顿即可发送到当前对话后端。\n识别语言与心的回复语言分别设置。智谱识别会上传当前短句；\n本地 Whisper 不上传音频。心回复与朗读期间暂停收音。")
+        note = QLabel("开麦后，说完停顿即可发送到当前对话后端。\n识别语言与心的回复语言分别设置。智谱识别会上传当前短句；\n本地 Qwen ASR 不上传音频。心回复与朗读期间暂停收音。")
         note.setWordWrap(True)
         form.addRow(note)
         self.error = QLabel()
@@ -67,8 +63,8 @@ class MicrophoneDialog(QDialog):
     def save(self):
         candidate = deepcopy(self.owner.stt.config)
         candidate.update(device=self.device.currentData(), language=self.language.currentData(),
-            provider=self.provider.currentData(), model_path=self.model_path.text().strip(),
-            silence_ms=self.silence.value(), energy_threshold=self.energy.value(), fallback=self.fallback.isChecked(),
+            provider=self.provider.currentData(),
+            silence_ms=self.silence.value(), energy_threshold=self.energy.value(),
             hotwords=[line.strip() for line in self.hotwords.toPlainText().splitlines() if line.strip()],
             zhipu={"api_key": self.key.text().strip()})
         try:

@@ -7,6 +7,7 @@ import { loadLayingPose } from './laying_pose.js';
 import {blendFromCurrent} from './pose_transitions.js';
 import {setGroundSupport} from './ground_support.js';
 import {PoseCloth} from './pose_cloth.js';
+import {adaptChestPhysics} from './physics_compat.js';
 
 // 每个模型使用独立的 Ammo arena。切换时释放整个 arena 的引用，避免
 // 官方 MMDPhysics 缺少销毁接口导致刚体在同一 WASM heap 中累积。
@@ -27,6 +28,7 @@ export class AnimationRuntime {
     this.clips = createBuiltinClips(mesh);
     this.helper = new MMDAnimationHelper({ sync: false, resetPhysicsOnLoop: false });
     this.helper.onBeforePhysics = model => { this.behavior?.applyBones(); model.updateMatrixWorld(true); };
+    adaptChestPhysics(mesh);
     this.helper.add(mesh, { animation: this.clips.idle, physics: true,
       unitStep: 1 / 65, maxStepNum: 3, warmup: 30 });
     const objects = this.helper.objects.get(mesh);
@@ -36,6 +38,13 @@ export class AnimationRuntime {
     this.maskedIdleCache = new Map();
     this.motionGeneration = 0;
     this.physics = objects.physics;
+    // 原组件强制每帧至少推进一步；高刷新率下会使衣发物理快于动画。
+    // 交给 Bullet 累积真实时间，以固定步长求解。
+    this.physics._stepSimulation = delta => this.physics.world.stepSimulation(
+      delta, this.physics.maxStepNum, this.physics.unitStep);
+    this.physicsIdleTime = 0;
+    this.physicsMotionGeneration = this.motionGeneration;
+    this.physicsGaze = {x: 0, y: 0};
     this.activeAction = null;
     this.gestureRelease = null;
     this.finishedAction = null;
@@ -284,6 +293,8 @@ export class AnimationRuntime {
   }
 
   setPhysics(enabled) {
+    this.physicsIdleTime = 0;
+    this.physicsRestPose = null;
     this.physicsEnabled = enabled;
     this.helper.enable('physics', enabled && !this.poseProfile);
     if(this.poseProfile){this.poseCloth?.stop();}
@@ -291,6 +302,8 @@ export class AnimationRuntime {
   }
 
   resetPhysics() {
+    this.physicsIdleTime = 0;
+    this.physicsRestPose = null;
     const enabled = this.physicsEnabled;
     this.helper.enable('physics', false);
     this.behavior.prepareFrame();
@@ -308,7 +321,29 @@ export class AnimationRuntime {
     this.behavior.prepareFrame();
     // 物理仍限制步长；自然反应按实时时间结束，低帧率不延长口型与触摸。
     this.behavior.advance(realDelta);
+    let restingPhysics = false;
+    if (this.physicsEnabled && !this.poseProfile) {
+      const gaze = this.behavior.gaze;
+      const moving = this.motion !== 'idle' || this.gestureRelease || this.behavior.touchState
+        || this.behavior.idleAction || this.behavior.activity.state !== 'idle'
+        || this.behavior.activity.interacting || this.physicsMotionGeneration !== this.motionGeneration
+        || Math.hypot(gaze.x - this.physicsGaze.x, gaze.y - this.physicsGaze.y) > 0.002;
+      this.physicsMotionGeneration = this.motionGeneration;
+      this.physicsGaze = {...gaze};
+      this.physicsIdleTime = moving ? 0 : this.physicsIdleTime + delta;
+      restingPhysics = this.physicsIdleTime >= 3;
+      // 密集 PMX 碰撞在静止身体上仍会激发微振；静息后保留衣发姿态，互动时恢复。
+      if (restingPhysics && !this.physicsRestPose) this.physicsRestPose = this.dynamicBodies.map(b => ({
+        bone: b.bone, position: b.bone.position.clone(), rotation: b.bone.quaternion.clone(),
+      }));
+      if (!restingPhysics) this.physicsRestPose = null;
+      this.helper.enable('physics', !restingPhysics);
+    }
     this.helper.update(delta);
+    if (restingPhysics) for (const pose of this.physicsRestPose) {
+      pose.bone.position.copy(pose.position);
+      pose.bone.quaternion.copy(pose.rotation);
+    }
     if(this.gestureRelease&&!this.gestureRelease.isRunning()){
       this.stopGestureRelease();this.refreshMotionOwnership();
     }
@@ -336,7 +371,7 @@ export class AnimationRuntime {
     }
     this.frames++;
     this.elapsed += delta;
-    if (this.physicsEnabled) this.steps++;
+    if (this.physicsEnabled && !restingPhysics) this.steps++;
   }
 
   snapshot() {
@@ -350,7 +385,8 @@ export class AnimationRuntime {
       transition_duration:this.poseProfile?this.activeAction?.getClip().duration:null,
       queued_motion:this.pendingSide?'side_lying':this.pendingCommand?.group||null,
       floor_y:this.transitions?.floor??null,motion_error:this.asyncMotionError||null,
-      physics_active:this.physicsEnabled&&(!this.poseProfile||!!this.poseCloth),pose_profile:this.poseProfile,
+      physics_active:this.physicsEnabled&&(!this.poseProfile?!this.physicsRestPose:!!this.poseCloth),
+      physics_resting:this.physicsEnabled&&!this.poseProfile&&!!this.physicsRestPose,pose_profile:this.poseProfile,
       cloth:this.poseCloth?.snapshot()||null,
       engine: this.poseProfile&&this.physicsEnabled?'骨骼布料/PBD':'Ammo/Bullet', rigid_bodies: this.physics.bodies.length,
       constraints: this.physics.constraints.length, dynamic_bones: this.dynamicBodies.length,

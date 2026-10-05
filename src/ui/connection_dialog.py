@@ -2,7 +2,8 @@
 from copy import deepcopy
 from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QMessageBox, QTabWidget, QVBoxLayout, QWidget
 import yaml
-from src.core.app_config import project_path, read_yaml, validate_chat_config
+from src.core.app_config import read_yaml, validate_chat_config
+from src.core.user_settings import settings_path
 
 
 class ConnectionDialog(QDialog):
@@ -17,12 +18,13 @@ class ConnectionDialog(QDialog):
         self.fields = {}
         groups = (("hermes", "Hermes · Hsin", (("url", "本地地址（留空自动连接）"), ("home", "Hermes 数据目录"), ("profile", "Agent 配置名称"), ("token", "会话凭据（通常留空）"))),
                   ("openclaw", "OpenClaw", (("url", "本地网关地址"), ("agent", "Agent 名称"), ("token", "网关凭据"))),
-                  ("deepseek", "DeepSeek", (("model", "模型"), ("api_key", "API Key"))))
+                  ("deepseek", "DeepSeek", (("model", "模型"), ("api_key", "API Key"))),
+                  ("ollama", "Qwen · 本机聊天", (("url", "本机Ollama地址"), ("model", "已安装模型名称"))))
         for backend, title, fields in groups:
             page = QWidget()
             form = QFormLayout(page)
             for key, label in fields:
-                field = QLineEdit(owner.chat.config[backend][key])
+                field = QLineEdit(owner.chat.config.get(backend, {}).get(key, ""))
                 if key in ("token", "api_key"):
                     field.setEchoMode(QLineEdit.EchoMode.Password)
                 form.addRow(label, field)
@@ -37,11 +39,11 @@ class ConnectionDialog(QDialog):
     def save(self):
         config = deepcopy(self.owner.chat.config)
         for (backend, key), field in self.fields.items():
-            config[backend][key] = field.text().strip()
+            config.setdefault(backend, {})[key] = field.text().strip()
         config["provider"] = self.owner.chat.provider
         try:
             validate_chat_config(config)
-            path = project_path("config.local.yaml")
+            path = settings_path(self.owner.config)
             local = read_yaml(path) if path.is_file() else {}
             local["chat"] = config
             temp = path.with_suffix(".tmp")

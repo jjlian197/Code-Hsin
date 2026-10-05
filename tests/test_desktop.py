@@ -629,7 +629,7 @@ class APITest(QtWindowTestCase):
         async def client():
             url = self.services.endpoints()["http"]
             async with ClientSession() as session:
-                async with session.post(url + "/api/stt_config", json={"enabled": True, "language": "ja", "provider": "whisper"}) as r:
+                async with session.post(url + "/api/stt_config", json={"enabled": True, "language": "ja", "provider": "qwen"}) as r:
                     changed = await r.json()
                 async with session.post(url + "/api/stt_config", json={"language": "unknown", "enabled": False}) as r:
                     invalid = await r.json()

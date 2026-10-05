@@ -74,6 +74,8 @@ class HsinSpriteWindow(QMainWindow):
         self.voice_player = LocalVoicePlayer(self)
         self.tts = TTSManager(config, self.voice_player, self)
         self.chat = ChatManager(config, self)
+        # 翻译器引用同一配置容器，随恢复的实际聊天后端选择本机或云端。
+        self.config["chat"]["provider"] = self.chat.provider
         self.stt = STTManager(config, self)
         self.stt.transcript.connect(self._microphone_transcript)
         self.stt.failed.connect(lambda error: self.show_message(error[:500], 8000))
@@ -129,6 +131,8 @@ class HsinSpriteWindow(QMainWindow):
             signal.connect(self._sync_rest_activity)
         # 只接收本应用的操作，聊天/设置窗口中的输入同样算互动。
         QApplication.instance().installEventFilter(self)
+        from src.core.voice_idle import VoiceIdleRelease
+        self.voice_idle = VoiceIdleRelease(self)
 
     def _record_interaction(self):
         self._last_interaction = time.monotonic()
@@ -329,7 +333,7 @@ class HsinSpriteWindow(QMainWindow):
         engine_group = QActionGroup(engines)
         engine_group.setExclusive(True)
         self._voice_engine_actions = {}
-        for engine, label in (("gptsovits", "心 · GPT-SoVITS"), ("edge", "Edge · 通用女声（联网）")):
+        for engine, label in (("gptsovits", "心 · GPT-SoVITS"), ("qwen", "心 · Qwen（本机）"), ("edge", "Edge · 通用女声（联网）")):
             action = engines.addAction(label)
             action.setCheckable(True)
             engine_group.addAction(action)
@@ -494,7 +498,9 @@ class HsinSpriteWindow(QMainWindow):
     def set_chat_provider(self, provider):
         if provider != self.chat.provider:
             self.tts.stop()
-        return self.chat.configure(provider)
+        result = self.chat.configure(provider)
+        self.config["chat"]["provider"] = provider
+        return result
 
     def configure_chat(self):
         self.open_settings(page=0)
@@ -738,7 +744,7 @@ class HsinSpriteWindow(QMainWindow):
         self._voice_fallback_action.setChecked(self.tts.fallback)
         state = self.tts.snapshot()
         phases = {"queued": "准备语音…", "translating": "文本翻译中…", "synthesizing": "语音合成中…", "fallback": "备用音色合成中…"}
-        ready = "心的音色已就绪" if self.tts.engine == "gptsovits" else "Edge 通用音色已就绪"
+        ready = "心的音色已就绪" if self.tts.engine in ("gptsovits", "qwen") else "Edge 通用音色已就绪"
         if self.tts.engine == "gptsovits" and state["preset_voice"] and not state["trained_voice"]:
             ready = "中日预存语音可用 · 新句需音色配置或 Edge"
         warmup = state["warmup"]
@@ -900,6 +906,7 @@ class HsinSpriteWindow(QMainWindow):
         temp.replace(self._state_path)
 
     def cleanup(self):
+        self.voice_idle.close()
         self.rest_timer.stop()
         self.reply_bubble.stop()
         QApplication.instance().removeEventFilter(self)

@@ -6,7 +6,10 @@ sprite:
     forms: {}
   animation:
     physics: true
-    transitions: {}
+    side_lying: src/assets/motions/side_lying.fbx
+    transitions:
+      first: src/assets/motions/first.json
+      second: src/assets/motions/second.json
 websocket:
   enabled: true
   host: 127.0.0.1
@@ -25,5 +28,4 @@ voice:
   auto_translate: false
   fallback: false
 stt:
-  model_path: ""
-  fallback: false
+  provider: qwen

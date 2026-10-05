@@ -1,4 +1,4 @@
-"""心的三种对话通道；直连仅聊天，本地 Agent 沿用各自已有的人设和工具。"""
+"""心的对话通道；直连仅聊天，本地 Agent 沿用各自已有的人设和工具。"""
 import asyncio
 import json
 import os
@@ -9,8 +9,9 @@ import websockets
 
 from src.core.hermes_bridge import HermesBridge, local_url
 from src.core.chat_preferences import reply_instruction
+from src.core.ollama_bridge import OllamaBridge
 
-PROVIDERS = {"hermes": "Hermes · Hsin", "openclaw": "OpenClaw", "deepseek": "DeepSeek 直连"}
+PROVIDERS = {"hermes": "Hermes · Hsin", "openclaw": "OpenClaw", "deepseek": "DeepSeek 直连", "ollama": "Qwen · 本机聊天（实验）"}
 HSIN_PROMPT = """你是《鸣潮》的心（Hsin），在御者的桌面上陪伴他。称呼用户为御者，语气温柔从容，
 偶尔俏皮，对日常小事怀有好奇心。回答自然、适合朗读。当前是文字直连，
 没有本地 Agent 的工具权限。没有依据时不要声称看到了屏幕、读了文件、操作了软件或记得未知往事。
@@ -172,4 +173,4 @@ class OpenClawBridge:
 
 
 def make_backend(provider, config):
-    return {"hermes": HermesBridge, "openclaw": OpenClawBridge, "deepseek": DeepSeekBridge}[provider](config)
+    return {"hermes": HermesBridge, "openclaw": OpenClawBridge, "deepseek": DeepSeekBridge, "ollama": OllamaBridge}[provider](config)

@@ -6,7 +6,8 @@ datas = [(str(root / 'src/assets'), 'src/assets'),
          (str(root / 'voice/presets'), 'voice/presets'),
          (str(root / 'voice/recordings'), 'voice/recordings'),
          (str(root / 'voice/samples'), 'voice/samples'),
-         (str(root / 'tools/hsin_voice_server.py'), 'tools')]
+         (str(root / 'tools/hsin_voice_server.py'), 'tools'),
+         (str(root / 'src/core/qwen_worker.py'), 'src/core')]
 for package in ('PyQt6', 'PyQt6-WebEngine', 'PyQt6-Qt6', 'PyQt6-WebEngine-Qt6', 'PyQt6-sip',
                 'edge-tts', 'websockets', 'aiohttp', 'requests', 'PyYAML', 'loguru', 'webrtcvad-wheels'):
     datas += copy_metadata(package)

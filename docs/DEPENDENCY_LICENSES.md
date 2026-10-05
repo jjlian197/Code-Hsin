@@ -1,6 +1,6 @@
 # 分发与第三方说明
 
-应用代码随同版本源码公开，采用 GNU GPL v3；第三方代码和媒体保留各自权利。GPL 文本随包提供，源码与构建入口见 https://github.com/jjlian197/Code-Hsin/tree/v1.1.0 。源码包含应用程序与重建工具；模型受独立限制，不随程序许可重新授权。
+应用代码随同版本源码公开，采用 GNU GPL v3；第三方代码和媒体保留各自权利。GPL 文本随包提供，源码与构建入口见 https://github.com/jjlian197/Code-Hsin/tree/v1.2.0 。源码包含应用程序与重建工具；模型受独立限制，不随程序许可重新授权。
 
 | 组件 | 使用与来源 |
 | --- | --- |
@@ -16,3 +16,5 @@
 程序无商业售卖或官方身份声明。原声清单只保留已筛选角色台词，固定回应是本机已训练音色的合成结果，不混入私人聊天。原 PMX 模型说明禁止二次配布，用户须自行取得并导入。Aemeath spirit 提供透明窗口/气泡等参考，复用记录保存在源码 `docs/reference-provenance.json`。
 
 本次 EXE 不包含 Whisper/CTranslate2 识别组件或模型，也不包含 GPT-SoVITS/PyTorch 权重与推理环境；源码版可由用户独立安装这些依赖，遵循各自上游许可。
+
+默认动作：`src/assets/motions/side_lying.fbx`为用户指定的Female Laying Pose；`first.json`、`second.json`为项目重定向产物，躺下/起身来源CMU 113_08、140_03，来源与转换见SIDE_LYING_TRANSITION_PLAN.md。动作与模型相关权利不由应用GPL重新授权。Qwen模型与Ollama环境不随包分发，使用者按各自上游许可部署。

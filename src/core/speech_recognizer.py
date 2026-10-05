@@ -1,13 +1,8 @@
 """短句识别后端；音频只存在内存，密钥不进入状态、日志或命令行。"""
-import importlib.util
 import io
 import os
 import base64
 import json
-from pathlib import Path
-import queue
-import subprocess
-import sys
 import threading
 import wave
 from src.core.stt_hotwords import hotwords
@@ -24,11 +19,12 @@ def wav_bytes(pcm):
 
 
 class SpeechRecognizer:
-    def __init__(self):
-        self._process = None
-        self._responses = None
+    def __init__(self, runtime=None):
         self._lock = threading.Lock()
         self._closed = False
+        self._qwen = None
+        self._qwen_identity = None
+        self._runtime = runtime
 
     @staticmethod
     def key(config):
@@ -39,31 +35,41 @@ class SpeechRecognizer:
         requested = config.get("provider", "auto")
         if requested != "auto":
             return requested
-        return "zhipu" if cls.key(config) and config.get("language") != "ja" else "whisper"
-
-    @staticmethod
-    def local_available():
-        return importlib.util.find_spec("faster_whisper") is not None
+        return "zhipu" if cls.key(config) and config.get("language") != "ja" else "qwen"
 
     def transcribe(self, pcm, config):
+        if self._closed:
+            raise RuntimeError("语音识别已关闭")
         if not pcm or len(pcm) > 16000 * 2 * 25 or len(pcm) % 2:
             raise ValueError("识别音频需要 25 秒以内的 16kHz 单声道 PCM")
         audio = wav_bytes(pcm)
         provider = self.provider(config)
         warning = ""
+        if provider == "qwen":
+            from src.core.model_process import ModelProcess
+            from src.core.app_config import project_path
+            settings = config.get("qwen", {})
+            identity = json.dumps(settings, sort_keys=True)
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("语音识别已关闭")
+                if self._qwen is None or identity != self._qwen_identity:
+                    if self._qwen:
+                        self._qwen.close()
+                    self._qwen = ModelProcess(settings["python"], settings.get("gpu", "4080"), project_path(self._runtime or ".runtime") / "qwen-asr")
+                    self._qwen_identity = identity
+                worker = self._qwen
+            result = worker.request("asr", model=str(project_path(settings["model"])),
+                audio=base64.b64encode(audio).decode("ascii"), language=config.get("language", "zh"), context="、".join(hotwords(config)))
+            return result["text"], "qwen", ""
         if provider == "zhipu":
-            try:
-                return self._cloud(audio, config), "zhipu", warning
-            except (RuntimeError, ValueError) as exc:
-                if not config.get("fallback", True):
-                    raise
-                warning = str(exc) + "；已使用本地 Whisper"
-        return self._local(audio, config), "whisper", warning
+            return self._cloud(audio, config), "zhipu", ""
+        raise ValueError("识别引擎需要 qwen 或 zhipu")
 
     def _cloud(self, audio, config):
         key = self.key(config)
         if not key:
-            raise ValueError("请在麦克风设置中填写智谱 API Key，或选择本地 Whisper")
+            raise ValueError("请在麦克风设置中填写智谱 API Key，或选择本地 Qwen ASR")
         import requests
         data = {"model": "glm-asr-2512", "stream": "false"}
         words = hotwords(config)
@@ -88,78 +94,17 @@ class SpeechRecognizer:
         except ValueError:
             raise RuntimeError("智谱识别响应格式无效") from None
 
-    def _local(self, audio, config):
-        if not self.local_available():
-            if getattr(sys, "frozen", False):
-                raise RuntimeError("本版 EXE 暂未包含本地 Whisper；请选择智谱识别，或使用源码版")
-            raise RuntimeError("本地识别组件未安装，请安装 requirements-stt.txt")
-        path = config.get("model_path", "").strip() or "base"
-        language = config.get("language", "zh")
-        try:
-            with self._lock:
-                if self._closed:
-                    raise RuntimeError("语音识别已关闭")
-                if self._process is None or self._process.poll() is not None:
-                    if self._process:
-                        for stream in (self._process.stdin, self._process.stdout):
-                            if stream:
-                                stream.close()
-                    self._responses = queue.Queue()
-                    env = dict(os.environ, PYTHONIOENCODING="utf-8", HF_HUB_OFFLINE="1")
-                    # Qt/OpenMP 与 Whisper 隔离；仅在收到语音后加载 CPU 模型。
-                    command = [sys.executable, "-u", "-m", "src.core.stt_worker"]
-                    from src.core.app_config import PROJECT_ROOT
-                    self._process = subprocess.Popen(command,
-                        cwd=str(PROJECT_ROOT), env=env,
-                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-                    process, responses = self._process, self._responses
-                    def read():
-                        try:
-                            for line in process.stdout:
-                                try:
-                                    value = json.loads(line)
-                                except (ValueError, UnicodeError):
-                                    continue
-                                responses.put(value)
-                        except (OSError, ValueError):
-                            pass
-                        finally:
-                            responses.put({"error": "Whisper 子进程异常退出，请检查本地识别依赖"})
-                    threading.Thread(target=read, name="HsinSTTReader", daemon=True).start()
-                process, responses = self._process, self._responses
-                request = {"audio": base64.b64encode(audio).decode("ascii"), "language": language, "model": path,
-                           "hotwords": hotwords(config)}
-                process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
-                process.stdin.flush()
-            response = responses.get(timeout=60)
-            if response.get("error"):
-                raise RuntimeError(response["error"])
-            return str(response.get("text", "")).strip()[:4000]
-        except RuntimeError:
-            raise
-        except queue.Empty:
-            self._terminate()
-            raise RuntimeError("本地 Whisper 识别超时，请重试") from None
-        except Exception:
-            raise RuntimeError("本地 Whisper 识别失败") from None
-
-    def _terminate(self):
-        with self._lock:
-            process, self._process = self._process, None
-        if process:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-            for stream in (process.stdin, process.stdout):
-                if stream:
-                    stream.close()
-
     def close(self):
         with self._lock:
             self._closed = True
-        self._terminate()
+        if self._qwen:
+            self._qwen.close()
+
+    def cancel(self):
+        if self._qwen and self._qwen.active.is_set():
+            self._qwen.cancel()
+
+    def release_idle(self):
+        with self._lock:
+            worker = self._qwen
+        return worker.release_idle() if worker else False

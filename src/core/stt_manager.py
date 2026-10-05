@@ -16,13 +16,14 @@ def validate_stt(config):
     if not isinstance(config, dict):
         raise ValueError("stt 需要配置对象")
     hotwords(config)
-    if config.get("provider", "auto") not in {"auto", "zhipu", "whisper"}:
-        raise ValueError("识别引擎需要 auto、zhipu 或 whisper")
+    if config.get("provider", "auto") not in {"auto", "zhipu", "qwen"}:
+        raise ValueError("识别引擎需要 auto、zhipu 或 qwen")
+    if config.get("provider") == "qwen":
+        from src.core.app_config import validate_qwen
+        validate_qwen(config.get("qwen"), ("python", "model", "gpu"))
     if config.get("language", "zh") not in {"auto", "zh", "ja"}:
         raise ValueError("识别语言需要 auto、zh 或 ja")
-    if type(config.get("fallback", True)) is not bool:
-        raise ValueError("stt.fallback 需要布尔值")
-    for name in ("device", "model_path"):
+    for name in ("device",):
         if not isinstance(config.get(name, ""), str):
             raise ValueError(f"stt.{name} 需要字符串")
     for name, lower, upper, default in (("silence_ms", 300, 2000, 700), ("energy_threshold", 50, 5000, 250)):
@@ -80,6 +81,10 @@ class STTManager(QObject):
     def __init__(self, config, parent=None, recognizer=None):
         super().__init__(parent)
         self.config = deepcopy(config.get("stt", {}))
+        if self.config.get("provider") == "whisper":
+            self.config["provider"] = "qwen"
+        self.config.pop("model_path", None)
+        self.config.pop("fallback", None)
         validate_stt(self.config)
         self.config["hotwords"] = hotwords(self.config)
         self.enabled = False  # 每次启动都由用户主动开麦。
@@ -95,7 +100,7 @@ class STTManager(QObject):
         self._generation = 0
         self._closed = False
         self._cooldown = 0.0
-        self._recognizer = recognizer or SpeechRecognizer()
+        self._recognizer = recognizer or SpeechRecognizer(config.get("runtime", {}).get("directory"))
         try:
             import webrtcvad
             self._vad = webrtcvad.Vad(2)
@@ -113,6 +118,10 @@ class STTManager(QObject):
                 for device in QMediaDevices.audioInputs()]
 
     def snapshot(self):
+        from src.core.app_config import project_path
+        qwen = self.config.get("qwen", {})
+        local_ready = (project_path(qwen.get("python", "")).is_file() and
+            (project_path(qwen.get("model", "")) / "config.json").is_file()) if self.config.get("provider") == "qwen" else False
         return {"enabled": self.enabled, "listening": self.source is not None,
                 "recognizing": self.busy, "blocked": self.blocked,
                 "speech_active": self._segmenter.active, "level": round(self.level, 3),
@@ -122,14 +131,14 @@ class STTManager(QObject):
                 "hotwords": list(self.config["hotwords"]),
                 "last_text": self.last_text, "error": self.error, "warning": self.warning,
                 "cloud_configured": bool(SpeechRecognizer.key(self.config)),
-                "local_installed": SpeechRecognizer.local_available()}
+                "local_installed": local_ready}
 
     def configure(self, enabled=None, **settings):
         if self._closed:
             raise ValueError("语音识别正在退出")
         if enabled is not None and type(enabled) is not bool:
             raise ValueError("enabled 需要布尔值")
-        if any(key not in {"provider", "language", "device", "model_path", "fallback", "silence_ms", "energy_threshold", "zhipu", "hotwords"} for key in settings):
+        if any(key not in {"provider", "language", "device", "silence_ms", "energy_threshold", "zhipu", "hotwords", "qwen"} for key in settings):
             raise ValueError("未知语音识别设置")
         candidate = {**self.config, **deepcopy(settings)}
         validate_stt(candidate)
@@ -139,6 +148,8 @@ class STTManager(QObject):
         if changing or stopping:
             self._generation += 1  # 关麦/切换后，迟到的识别结果一律丢弃。
             self._stop_capture()
+            if hasattr(self._recognizer, "cancel"):
+                self._recognizer.cancel()
         self.config = candidate
         if changing:
             self._segmenter = VadSegmenter(self._is_speech, candidate.get("silence_ms", 700))
@@ -161,6 +172,8 @@ class STTManager(QObject):
         if blocked:
             self._generation += 1
             self._stop_capture()
+            if hasattr(self._recognizer, "cancel"):
+                self._recognizer.cancel()
         else:
             self._cooldown = time.monotonic() + 0.7
         self.changed.emit()
