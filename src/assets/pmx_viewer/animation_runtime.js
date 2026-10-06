@@ -27,9 +27,16 @@ export class AnimationRuntime {
     this.bindPose = mesh.skeleton.bones.map(b=>({position:b.position.clone(),rotation:b.quaternion.clone()}));
     this.rig = options.rig || null;
     this.clips = createBuiltinClips(mesh,this.rig);
+    if(options.running_clip)this.clips.treadmill_running=options.running_clip;
     if(options.allowed_motions)this.clips=Object.fromEntries(Object.entries(this.clips).filter(([name])=>options.allowed_motions.includes(name)));
     this.helper = new MMDAnimationHelper({ sync: false, resetPhysicsOnLoop: false });
     this.helper.onBeforePhysics = model => { this.behavior?.applyBones(); model.updateMatrixWorld(true); };
+    // 静息冻结的刚体姿态必须先恢复，再供物理后辅助骨计算继承旋转。
+    this.helper.onAfterPhysics = () => {
+      for (const pose of this.physicsRestPose || []) {
+        pose.bone.position.copy(pose.position);pose.bone.quaternion.copy(pose.rotation);
+      }
+    };
     adaptChestPhysics(mesh);
     this.helper.add(mesh, { animation: this.clips.idle, physics: true,
       unitStep: 1 / 65, maxStepNum: 3, warmup: 30 });
@@ -78,7 +85,7 @@ export class AnimationRuntime {
     if(this.transitions&&this.poseProfile){this.requestStanding({group});return;}
     const calibrated = name => name==='finger_heart'||name==='crossed_arms';
     if(calibrated(group)&&this.motion===group&&this.activeAction?.isRunning())return;
-    const leavingPose=!!this.poseProfile;
+    const leavingPose=!!this.poseProfile||this.motion==='treadmill_running';
     this.behavior.prepareFrame();
     // 手势中断时留下当前局部增量，短暂淡出；新动作从自身首帧进入，不先跳回待机。
     const releaseNames=(calibrated(this.motion)||this.gestureRelease)?this.clips.finger_heart.tracks.map(t=>t.name):[];
@@ -100,6 +107,14 @@ export class AnimationRuntime {
     this.poseProfile = null;
     this.helper.enable('ik',true);
     this.helper.enable('physics',this.physicsEnabled);
+    if(group==='treadmill_running'){
+      const affected=new Set(this.clips[group].tracks.map(t=>t.name));
+      if(!this.maskedIdleCache.has(group))this.maskedIdleCache.set(group,new THREE.AnimationClip('idle:running',4,
+        this.clips.idle.tracks.filter(t=>!affected.has(t.name))));
+      const previous=this.baseAction;
+      this.baseAction=this.mixer.clipAction(this.maskedIdleCache.get(group)).reset().play();
+      previous.stop();this.helper.enable('ik',false);
+    }
     if (group !== 'idle') {
       this.activeAction = this.mixer.clipAction(this.clips[group]);
       this.activeAction.reset().setLoop(THREE.LoopOnce, 1).play();
@@ -155,6 +170,7 @@ export class AnimationRuntime {
 
   startPoseAction(name, enter=false) {
     const continuing=!!this.poseProfile;
+    if(this.motion==='treadmill_running')this.play('idle');
     this.behavior.prepareFrame();this.stopGestureRelease();
     let clip=this.transitions.clips[name];
     if(enter)clip=blendFromCurrent(clip,this.mesh);
@@ -342,23 +358,22 @@ export class AnimationRuntime {
       this.helper.enable('physics', !restingPhysics);
     }
     this.helper.update(delta);
-    if (restingPhysics) for (const pose of this.physicsRestPose) {
-      pose.bone.position.copy(pose.position);
-      pose.bone.quaternion.copy(pose.rotation);
-    }
     if(this.gestureRelease&&!this.gestureRelease.isRunning()){
       this.stopGestureRelease();this.refreshMotionOwnership();
     }
     if (this.finishedAction === this.activeAction && this.finishedAction) {
       if(this.transitions&&this.poseProfile){this.finishPoseAction();}
       else {
+      const running=this.motion==='treadmill_running';
       this.restoreIdle();
       this.activeAction.stop();
       this.activeAction = this.finishedAction = null;
       this.motion = 'idle';
+      if(running){this.restoreBindPose();this.helper.enable('ik',true);}
       this.behavior.setMotionClip(null);
       this.behavior.setManualMotion(false);
       this.evaluatePose();
+      if(running)this.physics.reset();
       }
     }
     else {

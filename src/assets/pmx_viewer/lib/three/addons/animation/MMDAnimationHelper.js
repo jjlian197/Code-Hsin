@@ -56,6 +56,7 @@ class MMDAnimationHelper {
 		};
 
 		this.onBeforePhysics = function ( /* mesh */ ) {};
+		this.onAfterPhysics = function ( /* mesh */ ) {};
 
 		// experimental
 		this.sharedPhysics = false;
@@ -522,6 +523,11 @@ class MMDAnimationHelper {
 		const grantSolver = objects.grantSolver;
 		const physics = objects.physics;
 		const looped = objects.looped;
+		// PMX 物理后骨骼读取本帧刚体回写结果；没有标记的模型保持原路径。
+		const staged = mixer && this.enabled.animation &&
+			! this.sharedPhysics &&
+			mesh.geometry.userData.MMD?.format === 'pmx' &&
+			mesh.geometry.userData.MMD.bones.some( bone => bone.afterPhysics );
 
 		if ( mixer && this.enabled.animation ) {
 
@@ -536,7 +542,7 @@ class MMDAnimationHelper {
 			this._saveBones( mesh );
 
 			// PMX animation system special path
-			if ( this.configuration.pmxAnimation &&
+			if ( ( this.configuration.pmxAnimation || staged ) &&
 				mesh.geometry.userData.MMD && mesh.geometry.userData.MMD.format === 'pmx' ) {
 
 				if ( ! objects.sortedBonesData ) objects.sortedBonesData = this._sortBoneDataArray( mesh.geometry.userData.MMD.bones.slice() );
@@ -545,7 +551,8 @@ class MMDAnimationHelper {
 					mesh,
 					objects.sortedBonesData,
 					ikSolver && this.enabled.ik ? ikSolver : null,
-					grantSolver && this.enabled.grant ? grantSolver : null
+					grantSolver && this.enabled.grant ? grantSolver : null,
+					staged ? false : null
 				);
 
 			} else {
@@ -582,6 +589,16 @@ class MMDAnimationHelper {
 
 		}
 
+		this.onAfterPhysics( mesh );
+
+		if ( staged ) {
+
+			this._animatePMXMesh( mesh, objects.sortedBonesData,
+				ikSolver && this.enabled.ik ? ikSolver : null,
+				grantSolver && this.enabled.grant ? grantSolver : null, true );
+
+		}
+
 	}
 
 	// Sort bones in order by 1. transformationClass and 2. bone index.
@@ -612,12 +629,28 @@ class MMDAnimationHelper {
 	// you are recommended to set constructor parameter "pmxAnimation: true"
 	// only if your PMX model animation doesn't work well.
 	// If you need better method you would be required to write your own.
-	_animatePMXMesh( mesh, sortedBonesData, ikSolver, grantSolver ) {
+	_animatePMXMesh( mesh, sortedBonesData, ikSolver, grantSolver, afterPhysics = null ) {
 
 		_quaternionIndex = 0;
 		_grantResultMap.clear();
+		// 跨阶段依赖只读取当前姿态，不能递归重算并重复叠加 Grant。
+		if ( afterPhysics !== null ) {
+
+			for ( const data of sortedBonesData ) {
+
+				if ( !! data.afterPhysics !== afterPhysics ) {
+
+					_grantResultMap.set( data.index, getQuaternion().copy( mesh.skeleton.bones[ data.index ].quaternion ) );
+
+				}
+
+			}
+
+		}
 
 		for ( let i = 0, il = sortedBonesData.length; i < il; i ++ ) {
+
+			if ( afterPhysics !== null && !! sortedBonesData[ i ].afterPhysics !== afterPhysics ) continue;
 
 			updateOne( mesh, sortedBonesData[ i ].index, ikSolver, grantSolver );
 

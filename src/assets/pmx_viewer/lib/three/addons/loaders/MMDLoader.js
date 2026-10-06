@@ -667,6 +667,7 @@ class GeometryBuilder {
 			const bone = {
 				index: i,
 				transformationClass: boneData.transformationClass,
+				afterPhysics: ( boneData.flag & 0x1000 ) !== 0,
 				parent: boneData.parentIndex,
 				name: boneData.name,
 				pos: boneData.position.slice( 0, 3 ),

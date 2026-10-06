@@ -10,6 +10,7 @@ import {transitionAssets} from './pose_transitions.js';
 import {matchRig} from './rig/matcher.js';
 import {createRigAccess} from './rig/access.js';
 import {validateMorphMap,mappedMorphNames} from './rig/morphs.js';
+import {applyHsinChestRig,hsinForm,runningClip} from './hsin_motion.js';
 
 let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
 let viewMode='full', headTarget=null, headScale=1;
@@ -179,6 +180,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     const loader=new MMDLoader();
     const data=await new Promise((resolve,reject)=>loader.loadPMX(url,resolve,undefined,reject));
     if(current!==generation)return;
+    const chestRigBones=applyHsinChestRig(data,options.model_hash);
     const originalMorphCount=data.morphs.length;
     // 只保留已实现的顶点表情，避免为百余个表情分配数百 MB 的显存。
     if(options.morph_map)validateMorphMap(options.morph_map,data.morphs.filter(m=>m.type===1).map(m=>m.name));
@@ -210,6 +212,13 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
         const response=await fetch(options.transition_url);if(!response.ok)throw new Error('动作文件无法读取');
         options.transitions=transitionAssets(await response.json(),options.model_hash,candidate);
       }catch(error){options.transition_error=String(error.message||error);console.warn(options.transition_error);}
+      if(current!==generation){dispose(candidate);return;}
+    }
+    const form=hsinForm(options.model_hash);
+    if(form&&(!options.allowed_motions||options.allowed_motions.includes('treadmill_running'))){
+      const response=await fetch(new URL(`../motions/running-${form}.json`,import.meta.url));
+      if(!response.ok)throw new Error('跑步动作文件无法读取');
+      options.running_clip=runningClip(await response.json(),candidate);
       if(current!==generation){dispose(candidate);return;}
     }
     runtime=new AnimationRuntime(candidate,ammo,options);
@@ -245,6 +254,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
       bones:data.metadata.boneCount,materials:data.metadata.materialCount,morphs:originalMorphCount,
       active_morphs:data.morphs.length,expressions:supported,texture_errors:0,
       texture_overrides:Object.keys(textureOverrides).length,
+      chest_rig_bones:chestRigBones,
       material_alpha:materialInfo,motions:Object.keys(runtime.clips),character:options.character||null,runtime:snapshot()};
     render();bridge.modelResult(requestId,true,JSON.stringify(info));
   }catch(error){

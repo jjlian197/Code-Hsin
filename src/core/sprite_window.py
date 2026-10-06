@@ -280,7 +280,8 @@ class HsinSpriteWindow(QMainWindow):
             motions_menu = menu.addMenu("动作")
             self._motion_actions = {}
             for key, label in (("idle", "待机"), ("nod", "点头"), ("wave", "挥手"),
-                               ("peace", "V 手势"), ("finger_heart", "双手比心"), ("crossed_arms", "双手交叉（X 手势）"), ("side_lying", "躺下休息（选择待机起身）")):
+                               ("peace", "V 手势"), ("finger_heart", "双手比心"), ("crossed_arms", "双手交叉（X 手势）"),
+                               ("treadmill_running", "跑步（半速）"), ("side_lying", "躺下休息（选择待机起身）")):
                 action = motions_menu.addAction(label, lambda checked=False, group=key: self._play_motion(group))
                 action.setEnabled(False)
                 self._motion_actions[key] = action
