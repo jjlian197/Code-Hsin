@@ -2,6 +2,8 @@
 
 当前正式版：**v1.3.0（Windows x64安装包、便携版与源码）**。[下载正式版](https://github.com/jjlian197/Code-Hsin/releases/tag/v1.3.0)。内置心的完整默认配置、双形态动作、中日固定语音和精选原声；新增角色配置保存/一键切换，程序与用户数据分离，升级保留个人设置。PMX与推理权重自行导入；支持可选Ollama与Qwen本地听写。见[EXE说明](docs/WINDOWS_EXE.md)、[角色管理](docs/CHARACTER_PACKAGES.md)与[本地部署](docs/LOCAL_SETUP.md)。
 
+心的 PMX 模型下载来源：[模之屋模型页面](https://www.aplaybox.com/details/model/r9SvHzwXZyUG)。下载后保留模型和贴图目录结构，在“设置 → 资源”选择对应形态的 PMX；使用须遵循下载页面及模型包内说明。
+
 版本内容与限制见 [发布说明](docs/RELEASE_NOTES.md)。模型加载时，竖向画布使用角色竖版插画，横向画布使用月夜横版插画；加载完成自动收起。
 
 以鸣潮角色“心”为主角的独立 Windows 桌面项目，桌面框架适配自本机 `aemeath-spirit`。

@@ -14,7 +14,7 @@
 | aiohttp / websockets / requests / PyYAML / loguru / edge-tts / webrtcvad | 依赖元数据与许可文本保留在 `_internal` 的 dist-info/licenses 目录 |
 | 图标、加载插画、角色语音 | 鸣潮 / KURO GAMES 角色素材，保留库洛原署名与原声来源；不是 GPL 资产 |
 
-程序无商业售卖或官方身份声明。原声清单只保留已筛选角色台词，固定回应是本机已训练音色的合成结果，不混入私人聊天。原 PMX 模型说明禁止二次配布，用户须自行取得并导入。Aemeath spirit 提供透明窗口/气泡等参考，复用记录保存在源码 `docs/reference-provenance.json`。
+程序无商业售卖或官方身份声明。原声清单只保留已筛选角色台词，固定回应是本机已训练音色的合成结果，不混入私人聊天。原 PMX 模型说明禁止二次配布，用户须自行取得并导入；心的模型下载来源为[模之屋模型页面](https://www.aplaybox.com/details/model/r9SvHzwXZyUG)，使用须遵循页面及模型包内说明。Aemeath spirit 提供透明窗口/气泡等参考，复用记录保存在源码 `docs/reference-provenance.json`。
 
 本次 EXE 不包含 Whisper/CTranslate2 识别组件或模型，也不包含 GPT-SoVITS/PyTorch 权重与推理环境；源码版可由用户独立安装这些依赖，遵循各自上游许可。
 
