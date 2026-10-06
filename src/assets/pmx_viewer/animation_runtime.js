@@ -25,7 +25,9 @@ export class AnimationRuntime {
     this.ammo = ammo;
     window.Ammo = ammo;
     this.bindPose = mesh.skeleton.bones.map(b=>({position:b.position.clone(),rotation:b.quaternion.clone()}));
-    this.clips = createBuiltinClips(mesh);
+    this.rig = options.rig || null;
+    this.clips = createBuiltinClips(mesh,this.rig);
+    if(options.allowed_motions)this.clips=Object.fromEntries(Object.entries(this.clips).filter(([name])=>options.allowed_motions.includes(name)));
     this.helper = new MMDAnimationHelper({ sync: false, resetPhysicsOnLoop: false });
     this.helper.onBeforePhysics = model => { this.behavior?.applyBones(); model.updateMatrixWorld(true); };
     adaptChestPhysics(mesh);
@@ -62,7 +64,7 @@ export class AnimationRuntime {
     this.paused = false;
     this.dynamicBodies = this.physics.bodies.filter(b => b.params.type > 0 && b.params.boneIndex >= 0);
     this.restRotations = this.dynamicBodies.map(b => b.bone.quaternion.clone());
-    this.behavior = new HsinBehavior(mesh,options.behavior);
+    this.behavior = new HsinBehavior(mesh,options.behavior,Math.random,this.rig,options.morph_map);
     this.behavior.setActivity(options.activity||{state:'idle'});
     this.mixer.addEventListener('finished', event => {
       if (event.action !== this.activeAction) return;
@@ -227,7 +229,7 @@ export class AnimationRuntime {
     // 明确恢复当前待机值，绑定姿势仍保留给重定向使用。
     for(const track of this.clips.idle.tracks){
       const match=track.name.match(/^\.bones\[(.+)\]\.(quaternion|position)$/);
-      const bone=match&&this.mesh.skeleton.bones.find(b=>b.name===match[1]);
+      const bone=match&&(/^\d+$/.test(match[1])?this.mesh.skeleton.bones[Number(match[1])]:this.mesh.skeleton.bones.find(b=>b.name===match[1]));
       if(bone)bone[match[2]].fromArray(track.createInterpolant().evaluate(this.baseAction.time||0));
     }
     if(backup)this.mesh.skeleton.bones.forEach((bone,i)=>{
@@ -375,6 +377,7 @@ export class AnimationRuntime {
   }
 
   snapshot() {
+    const bone=(id,name)=>this.rig?this.rig.get(id):this.mesh.skeleton.bones.find(b=>b.name===name);
     let motionAngle = 0;
     this.dynamicBodies.forEach((b, i) => {
       motionAngle = Math.max(motionAngle, b.bone.quaternion.angleTo(this.restRotations[i]));
@@ -393,14 +396,16 @@ export class AnimationRuntime {
       frames: this.frames, physics_steps: this.steps, dynamic_bone_angle: motionAngle,
       motion_time: this.activeAction?.time || 0, animation_time: this.elapsed,
       document_hidden: document.hidden,
-      head_rotation: this.mesh.skeleton.bones.find(b => b.name === '頭')?.rotation.toArray().slice(0, 3),
-      root_rotation: this.mesh.skeleton.bones.find(b => b.name === 'センター')?.quaternion.toArray(),
-      root_position: this.mesh.skeleton.bones.find(b => b.name === 'センター')?.position.toArray(),
-      body_positions: Object.fromEntries([['head','頭'],['right_ankle','右足首'],['left_ankle','左足首']].map(([key,name])=>
-        [key,this.mesh.skeleton.bones.find(b=>b.name===name)?.getWorldPosition(new THREE.Vector3()).toArray()])),
-      torso_position: this.mesh.skeleton.bones.find(b => b.name === '上半身')?.position.toArray(),
-      right_arm_rotation: this.mesh.skeleton.bones.find(b => b.name === '右腕')?.rotation.toArray().slice(0, 3),
-      left_arm_rotation: this.mesh.skeleton.bones.find(b => b.name === '左腕')?.rotation.toArray().slice(0, 3),
+      rig:this.rig?{schema_version:this.rig.report.schemaVersion,model_hash:this.rig.report.model.sha256,
+        summary:this.rig.report.summary,mapped_basic:this.rig.report.summary.requiredUnresolved.length===0,uses_original_names:this.rig.usesOriginalNames}:null,
+      head_rotation: bone('head','頭')?.rotation.toArray().slice(0, 3),
+      root_rotation: bone('center','センター')?.quaternion.toArray(),
+      root_position: bone('center','センター')?.position.toArray(),
+      body_positions: Object.fromEntries([['head','head','頭'],['right_ankle','right_foot','右足首'],['left_ankle','left_foot','左足首']].map(([key,id,name])=>
+        [key,bone(id,name)?.getWorldPosition(new THREE.Vector3()).toArray()])),
+      torso_position: bone('spine','上半身')?.position.toArray(),
+      right_arm_rotation: bone('right_upper_arm','右腕')?.rotation.toArray().slice(0, 3),
+      left_arm_rotation: bone('left_upper_arm','左腕')?.rotation.toArray().slice(0, 3),
       right_palm_normal: palmNormal(this.mesh)?.toArray(),
       wasm_heap_bytes: this.ammo.HEAP8.length, paused: this.paused,
       behavior:this.behavior.snapshot() };

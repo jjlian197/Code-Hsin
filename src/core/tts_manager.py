@@ -202,7 +202,7 @@ class TTSManager(QObject):
     speech_started = pyqtSignal(str)
     failed = pyqtSignal(str)
     stage_changed = pyqtSignal(int, str)
-    warmup_completed = pyqtSignal(str, object)
+    warmup_completed = pyqtSignal(int, str, object)
 
     def __init__(self, config, player, parent=None):
         super().__init__(parent)
@@ -260,6 +260,8 @@ class TTSManager(QObject):
         self._stream_language = None
         self._warmup_language = self._warmup_target = None
         self._prewarm_enabled = False
+        self._resource_identity = (str(self.profiles_path), json.dumps(voice.get("qwen", {}), sort_keys=True), voice.get("port", 19880), True)
+        self._resources_pending = None
         self.warmup_state, self.warmup_error = "idle", None
         self.completed.connect(self._complete, Qt.ConnectionType.QueuedConnection)
         self.stage_changed.connect(self._stage, Qt.ConnectionType.QueuedConnection)
@@ -288,6 +290,8 @@ class TTSManager(QObject):
 
     def prewarm(self):
         self._prewarm_enabled = True
+        if self.engine == "gptsovits" and not self.profiles_path.is_file():
+            return  # 仅预存台词时无需启动不存在的推理环境。
         if self._closed or self.engine not in ("gptsovits", "qwen") or not self.snapshot()["configured"]:
             return
         if self._warmup_target == self.language and self.warmup_state in {"warming", "ready"}:
@@ -299,8 +303,8 @@ class TTSManager(QObject):
             self._condition.notify()
         self.changed.emit()
 
-    def _warmup_complete(self, language, error):
-        if self._closed or language != self._warmup_target:
+    def _warmup_complete(self, generation, language, error):
+        if self._closed or generation != self.generation or language != self._warmup_target:
             return
         self.warmup_state, self.warmup_error = ("failed" if error else "ready"), error
         self.changed.emit()
@@ -343,6 +347,20 @@ class TTSManager(QObject):
         if self._prewarm_enabled:
             self.prewarm()
         return self.snapshot()
+
+    def configure_resources(self, voice, *, presets=True):
+        """音色更换与合成在同一工作线程串行；旧任务仍由generation失效。"""
+        identity = (str(project_path(voice["profiles"])), json.dumps(voice["qwen"], sort_keys=True), voice["port"], presets)
+        if identity == self._resource_identity:
+            return
+        self.stop()
+        self.profiles_path = project_path(voice["profiles"])
+        self._resource_identity = identity
+        self._warmup_target = None
+        self.warmup_state = "idle"
+        with self._condition:
+            self._resources_pending = (self.profiles_path, dict(voice["qwen"]), voice["port"], presets)
+            self._condition.notify()
 
     def speak(self, text, language=None, speed=1.0, volume=None, translate=None):
         if not self.snapshot()["configured"]:
@@ -409,10 +427,17 @@ class TTSManager(QObject):
             with self._condition:
                 # 当前句播放时最多预合成两句，避免长回复一次占满缓存/显存。
                 self._condition.wait_for(lambda: self._jobs and self._prefetched < 2
-                    or self._warmup_language is not None and not self._jobs or self._closed)
+                    or self._warmup_language is not None and not self._jobs or self._resources_pending is not None or self._closed)
                 if self._closed:
                     return
-                if not self._jobs and self._warmup_language is not None:
+                if self._resources_pending is not None:
+                    resources, self._resources_pending = self._resources_pending, None
+                    self.model_work_active.set()
+                else:
+                    resources = None
+                if resources is not None:
+                    job = None
+                elif not self._jobs and self._warmup_language is not None:
                     warmup_language, self._warmup_language = self._warmup_language, None
                     warmup_engine, warmup_generation = self.engine, self.generation
                     job = None
@@ -420,6 +445,20 @@ class TTSManager(QObject):
                     job = self._jobs.popleft()
                     self._prefetched += 1
                 self.model_work_active.set()
+            if resources is not None:
+                profiles, settings, port, presets = resources
+                self.provider.close()
+                self.qwen.close()
+                self.provider = LocalSynthesizer(profiles, self.state_path.parent, port)
+                if not presets:
+                    self.provider.presets.entries = {}
+                from src.core.qwen_voice import QwenSynthesizer
+                self.qwen = QwenSynthesizer(settings, profiles, self.state_path.parent)
+                if self._closed:
+                    self.provider.close()
+                    self.qwen.close()
+                self.model_work_active.clear()
+                continue
             if job is None:
                 try:
                     {"gptsovits": self.provider, "qwen": self.qwen}[warmup_engine].warmup(warmup_language)
@@ -427,8 +466,8 @@ class TTSManager(QObject):
                 except Exception as exc:
                     error = str(exc)
                     logger.warning("心的语音后台预热失败：{}", exc)
-                if warmup_engine == self.engine and (warmup_engine != "qwen" or warmup_generation == self.generation):
-                    self.warmup_completed.emit(warmup_language, error)
+                if warmup_engine == self.engine and warmup_generation == self.generation:
+                    self.warmup_completed.emit(warmup_generation, warmup_language, error)
                 self.model_work_active.clear()
                 continue
             generation, text, language, speed, volume, engine, translate, fallback, request = job

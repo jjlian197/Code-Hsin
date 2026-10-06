@@ -31,6 +31,6 @@ export function classifyTouch(mesh, hit) {
 export function reactToTouch(runtime, part, side=1) {
   if(!runtime.behavior.touch(part,side))return false;
   // 外部全身动作和侧躺继续由用户控制；触摸仅在内置站立动作间切换。
-  if(!runtime.poseProfile&&runtime.motion in runtime.clips&&touchMotions[part])runtime.play(touchMotions[part]);
+  if(!runtime.poseProfile&&runtime.motion in runtime.clips&&touchMotions[part] in runtime.clips)runtime.play(touchMotions[part]);
   return true;
 }

@@ -28,7 +28,7 @@ class OllamaBridge:
         payload = {'model': self.config.get('model', DEFAULT_MODEL), 'stream': True, 'think': thinking,
                    'keep_alive': '5m', 'options': {'num_ctx': self.config.get('context_length', 4096),
                    'num_predict': budget, 'temperature': 0.2},
-                   'messages': [{'role': 'system', 'content': PROMPT + locale + reply_instruction(reply_length, language)},
+                   'messages': [{'role': 'system', 'content': (self.config.get('persona') or PROMPT) + locale + reply_instruction(reply_length, language)},
                                 *self.history, {'role': 'user', 'content': text}]}
         parts, done = [], False
         timeout = aiohttp.ClientTimeout(total=180, connect=10, sock_read=60)

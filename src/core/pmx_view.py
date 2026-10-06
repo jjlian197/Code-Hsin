@@ -11,6 +11,7 @@ from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from src.core.app_config import project_path
+from src.core.character_package import load_character_package
 
 
 class PmxBridge(QObject):
@@ -60,6 +61,9 @@ class PmxView(QWidget):
         self.view_mode = "full"
         self._texture_overrides = texture_overrides or {}
         self._animation_config = animation_config or {}
+        self.character_package = None
+        self._character_fallback = None
+        self.character_error = None
         self._transition_files = transition_files or {}
         self._physics_enabled = self._animation_config.get("physics", True)
         self._frame_pending = False
@@ -151,6 +155,32 @@ class PmxView(QWidget):
         except ValueError as exc:
             self._model_result(self._request_id, False, str(exc))
 
+    def load_character(self, package_path):
+        package = load_character_package(package_path)
+        self._character_fallback = (self.model_path, self.character_package)
+        self.character_error = None
+        self.character_package = package
+        self._manual_gaze = None
+        self._audio_input = {"value": 0.0, "active": False}
+        self._activity_input = {"state": "idle", "interacting": False}
+        try:
+            self.load_model(package["model"])
+        except (OSError, ValueError):
+            path, previous = self._character_fallback
+            self._character_fallback = None
+            self.character_package = previous
+            self.load_model(path)
+            raise
+
+    def load_default_model(self, path, *, fallback=False):
+        self._character_fallback = (self.model_path, self.character_package) if fallback else None
+        self.character_error = None
+        self.character_package = None
+        self._manual_gaze = None
+        self._audio_input = {"value": 0.0, "active": False}
+        self._activity_input = {"state": "idle", "interacting": False}
+        self.load_model(path)
+
     def load_model(self, path):
         if not path or not path.is_file() or path.suffix.lower() != ".pmx":
             raise ValueError("需要存在的本地 PMX 模型")
@@ -164,7 +194,7 @@ class PmxView(QWidget):
         self.load_error = None
         self.current_expression = "normal"
         self._request_id += 1
-        self.label.setText("心正在准备…")
+        self.label.setText((self.character_package["name"] if self.character_package else "心") + "正在准备…")
         self._layout_loading()
         self.loading_image.show()
         self.loading_image.raise_()
@@ -174,18 +204,36 @@ class PmxView(QWidget):
         if self._ready:
             url = QUrl.fromLocalFile(str(path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
             overrides = {}
-            for source, target in self._texture_overrides.get(str(path), {}).items():
+            texture_map = self.character_package["textures"] if self.character_package else self._texture_overrides.get(str(path), {})
+            for source, target in texture_map.items():
                 target_path = project_path(target)
                 if not target_path.is_file():
                     raise ValueError("贴图补全文件不存在：" + str(target_path))
                 source_url = url[:url.rfind('/') + 1] + source.replace('\\', '/')
                 overrides[source_url] = QUrl.fromLocalFile(str(target_path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
             options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input, "view_mode": self.view_mode}
+            import hashlib
+            options["model_hash"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            if self.character_package:
+                package = self.character_package
+                if options["model_hash"] != package["hash"]:
+                    raise ValueError("角色模型已变化，请重新导入角色包")
+                options.update(rig_map=package["rig"], morph_map=package["morphs"],
+                               allowed_motions=package["capabilities"]["motions"], character=package["name"])
+                options["physics"] = self._physics_enabled and package["capabilities"]["physics"]
+            rig_map_path = next((value for key, value in self._animation_config.get("rig_maps", {}).items()
+                                 if project_path(key) == path), None)
+            if rig_map_path and not self.character_package:
+                rig_path = project_path(rig_map_path)
+                if not rig_path.is_file():
+                    raise ValueError("骨架映射文件不存在：" + str(rig_path))
+                rig_map = json.loads(rig_path.read_text(encoding="utf-8"))
+                if rig_map.get("model", {}).get("sha256") != options["model_hash"]:
+                    raise ValueError("骨架映射与当前 PMX 哈希不匹配，请重新分析")
+                options["rig_map"] = rig_map
             transition = self._transition_files.get(str(path))
-            if transition and project_path(transition).is_file():
-                import hashlib
+            if not self.character_package and transition and project_path(transition).is_file():
                 options["transition_url"] = QUrl.fromLocalFile(str(project_path(transition))).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-                options["model_hash"] = hashlib.sha256(path.read_bytes()).hexdigest()
             self.web.page().runJavaScript(f"window.HsinPmx.loadModel({json.dumps(url)}, {self._request_id}, {json.dumps(overrides)}, {json.dumps(options)});")
 
     @pyqtSlot(int, bool, str)
@@ -195,6 +243,7 @@ class PmxView(QWidget):
         self.timer.stop()
         self.model_loaded = success
         if success:
+            self._character_fallback = None
             self.model_info = json.loads(details)
             runtime = self.model_info.get("runtime", {})
             if runtime.get("physics_enabled") != self._physics_enabled:
@@ -209,6 +258,14 @@ class PmxView(QWidget):
             self.set_activity(**self._activity_input, force=True)
             logger.info("PMX 已显示：{}，{}", self.model_path.name, self.model_info)
         else:
+            if self._character_fallback:
+                path, package = self._character_fallback
+                self._character_fallback = None
+                self.character_error = details
+                logger.error("角色包加载失败，恢复原角色：{}", details)
+                self.character_package = package
+                self.load_model(path)
+                return
             self.frame_timer.stop()
             self.load_error = details
             self.label.setText("心暂时没能出现\n请重新启动，或查看运行日志。")
@@ -228,6 +285,8 @@ class PmxView(QWidget):
     def get_available_motions(self):
         if not self.model_loaded:
             return []
+        if self.character_package:
+            return self.model_info.get("motions", [])
         path = self._laying_path()
         poses = ["side_lying"] if path.is_file() and path.suffix.lower() == ".fbx" else []
         return self.model_info.get("motions", []) + poses + [name for name in self._animation_config.get("vmd", {}) if name != "side_lying"]
@@ -261,7 +320,8 @@ class PmxView(QWidget):
 
     def set_physics(self, enabled):
         self._physics_enabled = enabled
-        self.web.page().runJavaScript(f"window.HsinPmx.setPhysics({json.dumps(enabled)});")
+        effective = enabled and (not self.character_package or self.character_package["capabilities"]["physics"])
+        self.web.page().runJavaScript(f"window.HsinPmx.setPhysics({json.dumps(effective)});")
 
     def set_view_mode(self, mode):
         self.view_mode = mode

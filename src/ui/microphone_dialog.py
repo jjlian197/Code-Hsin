@@ -3,7 +3,7 @@ from copy import deepcopy
 import os
 from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QCheckBox, QPlainTextEdit
 import yaml
-from src.core.app_config import PROJECT_ROOT, read_yaml
+from src.core.app_config import read_yaml
 from src.core.stt_manager import validate_stt
 from src.core.stt_hotwords import hotwords
 
@@ -70,7 +70,8 @@ class MicrophoneDialog(QDialog):
         try:
             validate_stt(candidate)
             candidate["hotwords"] = hotwords(candidate)
-            path = PROJECT_ROOT / "config.local.yaml"
+            from src.core.user_settings import settings_path
+            path = settings_path(self.owner.config)
             data = read_yaml(path) if path.exists() else {}
             data["stt"] = candidate
             temp = path.with_suffix(".tmp")

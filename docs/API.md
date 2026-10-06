@@ -2,6 +2,8 @@
 
 WebSocket：`ws://127.0.0.1:18765/sprite`。HTTP：`http://127.0.0.1:18766`。修改 `config.yaml` 或本机覆盖文件可调整端口，监听地址只允许本机回环地址。
 
+v1.3.0完整角色配置：`{"type":"character","data":{"action":"list"}}`列出已保存角色的ID与名称；`{"type":"character","data":{"action":"switch","id":"hsin"}}`加载并切换其模型、人设和音色。返回表示已开始切换，`get_status`的`character.active/switching`用于确认加载完成；失败保留原配置。该接口不返回角色的人设、资源配置或凭据。
+
 请求保留 aemeath-spirit 的结构：
 
 ```json

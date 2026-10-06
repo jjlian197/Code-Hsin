@@ -1,6 +1,7 @@
 """独立配置：所有默认路径均以 Code Hsin 为基准。"""
 from copy import deepcopy
 from pathlib import Path
+import os
 import sys
 
 import yaml
@@ -8,6 +9,18 @@ from src.core.stt_hotwords import DEFAULT_HOTWORDS
 
 PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+
+
+def user_data_root():
+    """便携数据随目录移动；安装版数据独立于可替换的程序目录。"""
+    override = os.environ.get("HSIN_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if not getattr(sys, "frozen", False):
+        return None
+    if (PROJECT_ROOT / "portable.txt").is_file():
+        return PROJECT_ROOT / "data"
+    return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "Hsin"
 DEFAULT_CONFIG = {
     "sprite": {"name": "Hsin", "window": {"width": 400, "height": 600, "opacity": 1.0,
                "always_on_top": True, "click_through": False}, "renderer": "pmx",
@@ -40,6 +53,9 @@ def project_path(value):
     path = Path(value).expanduser()
     if path.is_absolute():
         return path.resolve()
+    data = user_data_root()
+    if data and ((path.parts and path.parts[0] in {".runtime", "models", "inference"}) or path.as_posix() in {"config.local.yaml", "voice/profiles.json"}):
+        return (data / path).resolve()
     local = (PROJECT_ROOT / path).resolve()
     resource = (RESOURCE_ROOT / path).resolve()
     return resource if not local.exists() and resource.exists() else local
@@ -65,9 +81,37 @@ def read_yaml(path):
 def load_config(path=None):
     path = Path(path).resolve() if path else PROJECT_ROOT / "config.yaml"
     config = merge_config(DEFAULT_CONFIG, read_yaml(path))
-    local = path.with_name("config.local.yaml")
+    data = user_data_root()
+    local = data / "config.local.yaml" if data else path.with_name("config.local.yaml")
+    if data:
+        data.mkdir(parents=True, exist_ok=True)
+        # 从旧便携版迁移用户设置/状态，原文件保留，且不覆盖已有新目录。
+        legacy = path.with_name("config.local.yaml")
+        if not local.exists() and legacy.is_file() and legacy != local:
+            import shutil
+            shutil.copyfile(legacy, local)
+        old_runtime = path.parent / ".runtime"
+        target = data / ".runtime"
+        if not target.exists() and old_runtime.is_dir():
+            import shutil
+            target.mkdir(parents=True)
+            for name in ("chat.json", "voice.json", "window.json", "mood.json", "pomodoro.json", "characters.json"):
+                if (old_runtime / name).is_file():
+                    shutil.copyfile(old_runtime / name, target / name)
+            if (old_runtime / "characters").is_dir():
+                shutil.copytree(old_runtime / "characters", target / "characters")
+        legacy_voice = path.parent / "voice/profiles.json"
+        user_voice = data / "voice/profiles.json"
+        if not user_voice.exists() and legacy_voice.is_file():
+            import shutil
+            user_voice.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(legacy_voice, user_voice)
     if local.exists():
         config = merge_config(config, read_yaml(local))
+    if data:
+        config["runtime"]["directory"] = str(data / ".runtime")
+        config["logging"]["file"] = str(data / ".runtime/hsin.log")
+        config["_settings_path"] = str(local)
     if config["stt"].get("provider") == "whisper":
         config["stt"]["provider"] = "qwen"
     config["stt"].pop("model_path", None)

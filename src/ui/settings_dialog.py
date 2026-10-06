@@ -53,15 +53,20 @@ class SettingsDialog(QDialog):
         self.resources_page()
         self.appearance_page()
         self.advanced_page()
+        if not first_run:
+            from src.ui.character_settings import CharacterSettingsPage
+            self.character_page = CharacterSettingsPage(owner)
+            self.tabs.addTab(self.character_page, "角色管理")
         # 首次引导只走到资源页；外观与内部端口留在之后的普通设置。
         self.last_page = 4 if first_run else self.tabs.count() - 1
         self.error = self.note("")
         self.error.setStyleSheet("color: #bd3546;")
         layout.addWidget(self.error)
-        refresh = QPushButton("检查本地配置（不联网）")
-        refresh.clicked.connect(self.refresh_status)
-        layout.addWidget(refresh)
-        layout.addWidget(self.note("连接、语音、麦克风和外观保存后生效；模型资源及端口修改在重启后生效。密钥仅存于本机配置。"))
+        self.refresh_button = QPushButton("检查本地配置（不联网）")
+        self.refresh_button.clicked.connect(self.refresh_status)
+        layout.addWidget(self.refresh_button)
+        self.save_note = self.note("连接、语音、麦克风和外观保存后生效；模型资源及端口修改在重启后生效。密钥仅存于本机配置。")
+        layout.addWidget(self.save_note)
         row = QHBoxLayout()
         self.back = QPushButton("上一步")
         self.back.clicked.connect(lambda: self.tabs.setCurrentIndex(self.tabs.currentIndex() - 1))
@@ -294,7 +299,9 @@ class SettingsDialog(QDialog):
         self.back.setVisible(self.first_run)
         self.back.setEnabled(index > 0)
         self.next.setVisible(self.first_run and index < self.last_page)
-        self.save_button.setVisible(not self.first_run or index == self.last_page)
+        self.save_button.setVisible((not self.first_run and self.tabs.tabText(index) != "角色管理") or (self.first_run and index == self.last_page))
+        self.refresh_button.setVisible(self.tabs.tabText(index) != "角色管理")
+        self.save_note.setVisible(self.tabs.tabText(index) != "角色管理")
         self.refresh_status()
 
     def refresh_status(self):

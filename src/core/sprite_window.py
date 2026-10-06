@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QPoint, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QPixmap
-from PyQt6.QtWidgets import QApplication, QFrame, QInputDialog, QMainWindow, QMenu, QStackedLayout, QSystemTrayIcon, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QFrame, QInputDialog, QMainWindow, QMenu, QMessageBox, QStackedLayout, QSystemTrayIcon, QWidget
 
 from src.core.app_config import project_path
 from src.core.sprite_view import SpriteView
@@ -133,6 +133,9 @@ class HsinSpriteWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
         from src.core.voice_idle import VoiceIdleRelease
         self.voice_idle = VoiceIdleRelease(self)
+        from src.core.character_settings import CharacterSettings
+        self.characters = CharacterSettings(self)
+        QTimer.singleShot(0, self.characters.restore)
 
     def _record_interaction(self):
         self._last_interaction = time.monotonic()
@@ -312,6 +315,8 @@ class HsinSpriteWindow(QMainWindow):
             self._follow_action.triggered.connect(lambda enabled: self.set_behavior({"mouse_follow": enabled}))
             menu.addAction(self._follow_action)
             menu.addAction("眨眼", lambda: self.sprite_view.blink() if self.sprite_view.model_loaded else None)
+            characters_menu = menu.addMenu("角色")
+            characters_menu.aboutToShow.connect(lambda: self._populate_characters(characters_menu))
             forms_menu = menu.addMenu("形态")
             for key, label in (("first", "一阶段"), ("second", "二阶段")):
                 if key in self.config["sprite"]["model"]["forms"]:
@@ -445,6 +450,8 @@ class HsinSpriteWindow(QMainWindow):
     def _model_actions_ready(self, success):
         if self.sprite_view.renderer_name != "pmx":
             return
+        if hasattr(self, "characters") and (success or self.sprite_view.load_error):
+            self.characters.finish(success)
         self._last_interaction = time.monotonic()
         self._rest_requested = self._wake_requested = False
         for name, action in self._motion_actions.items():
@@ -454,6 +461,9 @@ class HsinSpriteWindow(QMainWindow):
             action.setChecked(name == self.sprite_view.current_expression)
         self._sync_companion()
         self._sync_mood(force=True)
+        if success and self.sprite_view.character_error:
+            self.show_message("角色包未能加载，已恢复原角色：" + self.sprite_view.character_error[:180], 8000)
+            self.sprite_view.character_error = None
 
     def set_expression(self, name):
         self.sprite_view.set_expression(name)
@@ -695,7 +705,56 @@ class HsinSpriteWindow(QMainWindow):
         if form not in forms:
             raise ValueError("未知形态，需要 first 或 second")
         self._model_actions_ready(False)
-        self.sprite_view.load_model(project_path(forms[form]))
+        self.sprite_view.load_default_model(project_path(forms[form]))
+
+    def _populate_characters(self, menu):
+        menu.clear()
+        if hasattr(self, "characters"):
+            for profile in self.characters.profiles:
+                action = menu.addAction(profile["name"] + " · 完整配置", lambda checked=False, identity=profile["id"]: self.activate_character(identity))
+                action.setCheckable(True)
+                action.setChecked(profile["id"] == self.characters.active)
+            menu.addAction("角色管理…", lambda: self.open_settings(page=6))
+            menu.addSeparator()
+        menu.addAction("心 · 默认角色", lambda: self.set_model_form("first"))
+        packages = set((project_path(self.config["runtime"]["directory"]) / "characters").glob("*/character.json"))
+        packages.update(getattr(self, "_imported_characters", set()))
+        for path in sorted(packages):
+            try:
+                package = json.loads(path.read_text(encoding="utf-8"))
+                if package.get("format") != "hsin.character":
+                    continue
+                name = package.get("name", path.parent.name)
+                if not isinstance(name, str):
+                    continue
+            except (OSError, ValueError, AttributeError):
+                continue
+            action = menu.addAction(name[:64], lambda checked=False, p=path: self.set_character_package(p))
+            action.setCheckable(True)
+            action.setChecked(bool(self.sprite_view.character_package and self.sprite_view.character_package["file"] == path.resolve()))
+        menu.addSeparator()
+        menu.addAction("导入角色包…", self.import_character_package)
+
+    def activate_character(self, identity):
+        try:
+            self.characters.activate(identity)
+        except (OSError, ValueError, KeyError, TypeError, StopIteration):
+            self.show_message("无法切换角色，请在设置 → 角色管理检查模型和音色资源。", 6000)
+
+    def import_character_package(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择角色包", str(project_path(".runtime/characters")), "角色包 (character.json);;JSON 文件 (*.json)")
+        if path:
+            self.set_character_package(Path(path))
+
+    def set_character_package(self, path):
+        try:
+            self.sprite_view.load_character(path)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "角色包无法加载", str(exc))
+            return False
+        self._model_actions_ready(False)
+        self._imported_characters = getattr(self, "_imported_characters", set()) | {Path(path).resolve()}
+        return True
 
     def _play_motion(self, group, index=0):
         self._record_interaction()

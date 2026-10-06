@@ -7,6 +7,9 @@ import { gestureGeometry } from './calibrated_gestures.js';
 import { classifyTouch, reactToTouch } from './interaction.js';
 import {installGroundSupport,setGroundSupport,visibleBounds} from './ground_support.js';
 import {transitionAssets} from './pose_transitions.js';
+import {matchRig} from './rig/matcher.js';
+import {createRigAccess} from './rig/access.js';
+import {validateMorphMap,mappedMorphNames} from './rig/morphs.js';
 
 let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
 let viewMode='full', headTarget=null, headScale=1;
@@ -178,7 +181,8 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     if(current!==generation)return;
     const originalMorphCount=data.morphs.length;
     // 只保留已实现的顶点表情，避免为百余个表情分配数百 MB 的显存。
-    const names=new Set(behaviorMorphNames);
+    if(options.morph_map)validateMorphMap(options.morph_map,data.morphs.filter(m=>m.type===1).map(m=>m.name));
+    const names=new Set(options.morph_map?mappedMorphNames(options.morph_map):behaviorMorphNames);
     data.morphs=data.morphs.filter(m=>m.type===1 && names.has(m.name));
     data.metadata.morphCount=data.morphs.length;
     const manager=new THREE.LoadingManager();
@@ -195,6 +199,9 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     await materialsReady;
     if(current!==generation){dispose(candidate);return;}
     const materialInfo=configureMaterials(candidate.material);
+    const rigReport=options.rig_map||matchRig(data,{name:data.metadata.modelName,
+      sha256:options.model_hash,boneCount:data.bones.length});
+    options.rig=createRigAccess(candidate,rigReport,options.model_hash);
     installGroundSupport(candidate);
     const ammo=await createPhysicsModule();
     if(current!==generation){dispose(candidate);return;}
@@ -212,11 +219,12 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     frameBounds=candidate.boundingBox.clone();
     standingBounds=frameBounds.clone();
     mesh=candidate;
-    const chest=mesh.skeleton.bones.find(b=>b.name==='上半身2').getWorldPosition(new THREE.Vector3());
-    const neck=mesh.skeleton.bones.find(b=>b.name==='首').getWorldPosition(new THREE.Vector3());
-    headScale=chest.distanceTo(neck)/2.593;
+    const chest=runtime.rig.upperTorso()?.getWorldPosition(new THREE.Vector3())||frameBounds.getCenter(new THREE.Vector3());
+    const neck=(runtime.rig.get('neck')||runtime.rig.get('head'))?.getWorldPosition(new THREE.Vector3())||chest.clone().add(new THREE.Vector3(0,2.593,0));
+    headScale=Math.max(.1,chest.distanceTo(neck)/2.593);
     headTarget=chest.clone().add(new THREE.Vector3(0,2.7,2).multiplyScalar(headScale));
-    const waist=mesh.skeleton.bones.find(b=>b.name==='上半身1').getWorldPosition(new THREE.Vector3()).y-.8*headScale;
+    const waistBone=runtime.rig.get('spine_mid')||runtime.rig.get('spine');
+    const waist=(waistBone?waistBone.getWorldPosition(new THREE.Vector3()).y:chest.y)-.8*headScale;
     const positions=mesh.geometry.attributes.position,skinIndex=mesh.geometry.attributes.skinIndex,skinWeight=mesh.geometry.attributes.skinWeight;
     upperBodyIndices=[];
     for(let i=0;i<positions.count;i++){
@@ -230,13 +238,14 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     }
     if(options.view_mode==='full'||Object.hasOwn(viewAngles,options.view_mode))viewMode=options.view_mode;
     scene.add(mesh);resize();
-    const supported=Object.keys(expressions).filter(name=>name==='normal'||
-      Object.keys(expressions[name]).every(m=>m in mesh.morphTargetDictionary));
+    const expressionMap=runtime.behavior.expressions;
+    const supported=Object.keys(expressionMap).filter(name=>name==='normal'||
+      Object.keys(expressionMap[name]).every(m=>m in mesh.morphTargetDictionary));
     const info={vertices:data.metadata.vertexCount,triangles:data.metadata.faceCount,
       bones:data.metadata.boneCount,materials:data.metadata.materialCount,morphs:originalMorphCount,
       active_morphs:data.morphs.length,expressions:supported,texture_errors:0,
       texture_overrides:Object.keys(textureOverrides).length,
-      material_alpha:materialInfo,motions:Object.keys(runtime.clips),runtime:snapshot()};
+      material_alpha:materialInfo,motions:Object.keys(runtime.clips),character:options.character||null,runtime:snapshot()};
     render();bridge.modelResult(requestId,true,JSON.stringify(info));
   }catch(error){
     dispose(candidate);
@@ -244,13 +253,13 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
   }
 }
 function setExpression(name){
-  if(!mesh || !(name in expressions))return false;
+  if(!mesh || !(name in runtime.behavior.expressions))return false;
   runtime.behavior.setExpression(name);
   runtime.update(0);
   render();return true;
 }
 function interactionLayout(){
-  const head=mesh?.skeleton.bones.find(b=>b.name==='頭');
+  const head=runtime?.rig?.get('head');
   if(!head)return {face:{x:0.5,y:0.22}};
   const position=head.getWorldPosition(new THREE.Vector3());position.y+=0.4;position.project(camera);
   // 头顶徽标留出狐耳高度，随头部转动与相机缩放一起投影。
@@ -265,9 +274,9 @@ function pickTouch(x,y){
   const hit=raycaster.intersectObject(mesh,false)[0];
   if(!hit)return null;
   let part=classifyTouch(mesh,hit);
-  const head=mesh.skeleton.bones.find(b=>b.name==='頭').getWorldPosition(new THREE.Vector3());
-  if(runtime.poseProfile&&head.distanceTo(hit.point)<2.2)part='head';
-  return {part,side:Math.sign(hit.point.x-head.x)||1};
+  const head=runtime.rig.get('head')?.getWorldPosition(new THREE.Vector3());
+  if(runtime.poseProfile&&head&&head.distanceTo(hit.point)<2.2)part='head';
+  return {part,side:Math.sign(hit.point.x-(head?.x||0))||1};
 }
 function touchAt(x,y){
   const hit=pickTouch(x,y);
@@ -311,6 +320,15 @@ window.HsinPmx={loadModel,setExpression,playMotion,setViewMode,
   dispose:()=>{stopped=true;generation++;dispose(mesh);mesh=null;renderer.dispose();}};
 // 开发检查只改镜头、不改姿态；正常窗口不会调用。重置后仍沿用产品原有取景。
 window.HsinPmxDebug={
+  // 实际求值后的语义骨坐标，用于新角色骨轴/姿态检查，不写回 PMX。
+  rigGeometry:()=>{
+    if(!runtime?.rig)return null;
+    mesh.updateMatrixWorld(true);mesh.skeleton.update();mesh.computeBoundingBox();
+    return {points:Object.fromEntries(Object.entries(runtime.rig.report.bones)
+      .filter(([id])=>runtime.rig.get(id)).map(([id])=>[id,runtime.rig.get(id).getWorldPosition(new THREE.Vector3()).toArray()])),
+      finite:mesh.skeleton.bones.every(b=>[...b.position,...b.quaternion,...b.scale].every(Number.isFinite)),
+      bounds:{min:mesh.boundingBox.min.toArray(),max:mesh.boundingBox.max.toArray()}};
+  },
   previewTransition:async(url,name,time)=>{
     const data=await fetch(url).then(r=>r.json());
     runtime.behavior.prepareFrame();runtime.helper.enable('physics',false);runtime.paused=true;

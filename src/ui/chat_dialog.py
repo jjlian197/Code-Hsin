@@ -39,7 +39,7 @@ class ChatDialog(QDialog):
         self.read_selected.clicked.connect(lambda: self.read_text(self.transcript.textCursor().selectedText().replace("\u2029", "\n")))
         reading.addWidget(self.read_selected)
         self.read_reply = QPushButton("重读最近回复")
-        self.read_reply.clicked.connect(lambda: self.read_text(next((text for role, text in reversed(owner.chat.messages) if role == "心"), "")))
+        self.read_reply.clicked.connect(lambda: self.read_text(next((text for role, text in reversed(owner.chat.messages) if role == owner.chat.character_name), "")))
         reading.addWidget(self.read_reply)
         reading.addStretch()
         layout.addLayout(reading)
@@ -104,6 +104,7 @@ class ChatDialog(QDialog):
             self.provider_label.setText(str(exc))
 
     def refresh(self):
+        self.setWindowTitle("和" + self.owner.chat.character_name + "聊天")
         chat = self.owner.chat
         self.provider_label.setText("基础陪伴 · 请在设置中开启 AI 对话" if not chat.config.get("enabled", True)
             else PROVIDERS[chat.provider] + (" · 正在回复…" if chat.busy else ""))
@@ -139,7 +140,7 @@ class ChatDialog(QDialog):
         self.speech_status.setText(status + ("\n" + chat.warning if chat.warning else ""))
         text = "\n\n".join(f"{role}：{content}" for role, content in chat.messages)
         if chat.partial:
-            text += "\n\n心：" + chat.partial
+            text += "\n\n" + chat.character_name + "：" + chat.partial
         bar = self.transcript.verticalScrollBar()
         at_end = bar.value() >= bar.maximum() - 4
         self.transcript.setPlainText(text)
@@ -147,7 +148,7 @@ class ChatDialog(QDialog):
             bar.setValue(bar.maximum())
         self.send_button.setEnabled(not chat.busy)
         self.read_selected.setEnabled(not chat.busy and tts["enabled"])
-        self.read_reply.setEnabled(not chat.busy and tts["enabled"] and any(role == "心" for role, _ in chat.messages))
+        self.read_reply.setEnabled(not chat.busy and tts["enabled"] and any(role == chat.character_name for role, _ in chat.messages))
         self.stop_button.setEnabled(chat.busy or tts["active"] or self.owner.reply_bubble.active)
 
     def open_near(self, owner):

@@ -1,6 +1,6 @@
 # 心 · Hsin 桌面精灵
 
-当前正式版：**v1.2.0（Windows x64 EXE便携版与源码）**。[下载正式版](https://github.com/jjlian197/Code-Hsin/releases/tag/v1.2.0)，解压完整文件夹后运行`Hsin.exe`。内置默认侧躺与双形态躺下/起身过渡、中日固定语音和精选原声；PMX与大模型自行导入。支持可选Ollama与Qwen本地听写，Whisper入口已移除，见[EXE说明](docs/WINDOWS_EXE.md)与[本地部署](docs/LOCAL_SETUP.md)。
+当前正式版：**v1.3.0（Windows x64安装包、便携版与源码）**。[下载正式版](https://github.com/jjlian197/Code-Hsin/releases/tag/v1.3.0)。内置心的完整默认配置、双形态动作、中日固定语音和精选原声；新增角色配置保存/一键切换，程序与用户数据分离，升级保留个人设置。PMX与推理权重自行导入；支持可选Ollama与Qwen本地听写。见[EXE说明](docs/WINDOWS_EXE.md)、[角色管理](docs/CHARACTER_PACKAGES.md)与[本地部署](docs/LOCAL_SETUP.md)。
 
 版本内容与限制见 [发布说明](docs/RELEASE_NOTES.md)。模型加载时，竖向画布使用角色竖版插画，横向画布使用月夜横版插画；加载完成自动收起。
 

@@ -268,3 +268,16 @@ class VoiceTest(unittest.TestCase):
             self.assertEqual(manager.snapshot()["warmup"]["state"], "ready")
         finally:
             manager.close()
+
+    def test_presets_without_training_profile_do_not_start_prewarm(self):
+        manager, player = self.manager()
+        manager.profiles_path.unlink()
+        try:
+            with patch.object(manager.provider, 'warmup') as warmup:
+                manager.prewarm()
+                self.assertIsNone(manager._warmup_language)
+                self.assertEqual(manager.warmup_state, 'idle')
+                warmup.assert_not_called()
+                self.assertEqual(player.played, [])
+        finally:
+            manager.close()

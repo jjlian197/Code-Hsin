@@ -1,6 +1,6 @@
 # 分发与第三方说明
 
-应用代码随同版本源码公开，采用 GNU GPL v3；第三方代码和媒体保留各自权利。GPL 文本随包提供，源码与构建入口见 https://github.com/jjlian197/Code-Hsin/tree/v1.2.0 。源码包含应用程序与重建工具；模型受独立限制，不随程序许可重新授权。
+应用代码随同版本源码公开，采用 GNU GPL v3；第三方代码和媒体保留各自权利。GPL 文本随包提供，源码与构建入口见 https://github.com/jjlian197/Code-Hsin/tree/v1.3.0 。源码包含应用程序与重建工具；模型受独立限制，不随程序许可重新授权。
 
 | 组件 | 使用与来源 |
 | --- | --- |
@@ -8,6 +8,7 @@
 | Qt6 / QtWebEngine / Chromium | 对应动态库及第三方条款；[Qt 许可与源码](https://doc.qt.io/qt-6/licensing.html)，Qt 6.10.0 源码 https://download.qt.io/archive/qt/6.10/6.10.0/ |
 | Python 3.11 | PSF 许可；https://www.python.org/downloads/source/ |
 | PyInstaller 6.19.0 | GPL 与启动器分发例外；https://pyinstaller.org/en/v6.19.0/license.html |
+| Inno Setup 7.1.0 | 安装包由官方编译器制作；https://jrsoftware.org/ ，源码 https://github.com/jrsoftware/issrc |
 | Three.js / MMD 解析器 / Ammo / fflate | 原有许可证保留于 `_internal/src/assets/pmx_viewer/lib` |
 | FFmpeg | Qt 音视频运行库，随 Qt 分发的许可信息保留；https://ffmpeg.org/legal.html |
 | aiohttp / websockets / requests / PyYAML / loguru / edge-tts / webrtcvad | 依赖元数据与许可文本保留在 `_internal` 的 dist-info/licenses 目录 |

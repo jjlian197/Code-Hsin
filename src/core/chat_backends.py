@@ -72,7 +72,7 @@ class DeepSeekBridge:
             raise ValueError("请在连接设置中填写 DeepSeek API Key")
         locale = "请用日语回答。" if language == "ja" else "请用中文回答。"
         payload = {"model": self.config.get("model", "deepseek-v4-flash"),
-            "messages": [{"role": "system", "content": HSIN_PROMPT + locale + reply_instruction(reply_length, language)}, *self.history,
+            "messages": [{"role": "system", "content": (self.config.get("persona") or HSIN_PROMPT) + locale + reply_instruction(reply_length, language)}, *self.history,
                          {"role": "user", "content": text}],
             "stream": True, "thinking": {"type": "disabled"}, "max_tokens": {"short": 512, "normal": 1536, "detailed": 4096}[reply_length]}
         timeout = aiohttp.ClientTimeout(total=120, connect=10, sock_read=40)

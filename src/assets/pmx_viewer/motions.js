@@ -1,5 +1,13 @@
 import * as THREE from 'three';
 import { createCalibratedGestures } from './calibrated_gestures.js';
+import {RIG_SCHEMA} from './rig/schema.js';
+import {HEART_POSE} from './heart_pose.js';
+
+// 复杂手势只开放给已经验证的心双形态；标准骨名不能证明其他角色已校准。
+const calibratedModels = new Set([
+  '4cf8454f7a79c84b88cf3dadfaca3fe2d55d3c6349fffd204acaf24dc78ea82e',
+  'e766ffc90c5a69a06da2365232616b1b730d8ecfa08fe685d770da0c509b8471',
+]);
 
 function rotationTrack(name, times, angles) {
   if (times.length !== angles.length) throw new Error(`动作关键帧数量不一致：${name}`);
@@ -8,9 +16,14 @@ function rotationTrack(name, times, angles) {
   return new THREE.QuaternionKeyframeTrack(`.bones[${name}].quaternion`, times, values);
 }
 
-export function createBuiltinClips(mesh) {
+export function createBuiltinClips(mesh, rig = null) {
   const names = new Set(mesh.skeleton.bones.map(b => b.name));
-  const track = (name, times, angles) => names.has(name) ? [rotationTrack(name, times, angles)] : [];
+  const semantic = new Map(RIG_SCHEMA.map(s=>[s.aliases[0],s.id]));
+  const track = (name, times, angles) => {
+    const index = rig?.index(semantic.get(name));
+    if (rig) return index === undefined ? [] : [rotationTrack(rig.usesOriginalNames?rig.get(semantic.get(name)).name:index,times,angles)];
+    return names.has(name) ? [rotationTrack(name,times,angles)] : [];
+  };
   const t = [0, 1, 2, 3, 4];
   const idle = new THREE.AnimationClip('idle', 4, [
     // 手臂的底层旋转固定；呼吸由行为层处理，避免待机摆动让双手接触点漂移。
@@ -20,14 +33,21 @@ export function createBuiltinClips(mesh) {
     ...track('右手首', t, t.map(() => [0, 0, 0])),
     ...track('左ひじ', t, t.map(() => [0, 0, 0])),
     ...track('左手首', t, t.map(() => [0, 0, 0])),
-    ...mesh.skeleton.bones.filter(b => /^[右左](親|人|中|薬|小)指[０１２３]$/.test(b.name))
-      .flatMap(b => track(b.name, t, t.map(() => [0,0,0]))),
+    ...(rig ? RIG_SCHEMA.filter(s=>s.group==='finger').map(s=>s.aliases[0]) :
+      mesh.skeleton.bones.filter(b => /^[右左](親|人|中|薬|小)指[０１２３]$/.test(b.name)).map(b=>b.name))
+      .flatMap(name => track(name, t, t.map(() => [0,0,0]))),
     ...track('上半身', t, t.map(v => [0, 0, 0])),
     ...track('上半身2', t, t.map(v => [0, 0, 0])),
     ...track('頭', t, t.map(v => [0, 0, 0])),
   ]);
   const nod = new THREE.AnimationClip('nod', 1.6,
     track('頭', [0, 0.3, 0.6, 0.9, 1.2, 1.6], [[0], [0.18], [-0.04], [0.15], [0.02], [0]]));
+  const legacyBones=[...HEART_POSE.map(p=>p.name),'上半身2','センター',
+    ...['右','左'].flatMap(side=>['親','人','中','薬','小'].map(finger=>side+finger+'指先'))];
+  if (rig && (!calibratedModels.has(rig.report.model.sha256) || !rig.usesOriginalNames || !legacyBones.every(name=>names.has(name)))) {
+    nod.blendMode = THREE.AdditiveAnimationBlendMode;
+    return nod.tracks.length ? {idle,nod} : {idle};
+  }
   const wave = createWaveClip(mesh);
   nod.blendMode = wave.blendMode = THREE.AdditiveAnimationBlendMode;
   return { idle, nod, wave, ...createGestureClips(mesh), ...createCalibratedGestures(mesh) };

@@ -8,6 +8,8 @@ from src.core.stt_hotwords import hotwords
 
 
 def settings_path(config):
+    if config.get("_settings_path"):
+        return Path(config["_settings_path"])
     return Path(config.get("_config_path", project_path("config.yaml"))).with_name("config.local.yaml")
 
 
@@ -45,6 +47,12 @@ def save_settings(owner, changes):
     owner.config.clear()
     owner.config.update(candidate)
     owner.config["setup"] = local["setup"]
+    if hasattr(owner, "characters") and owner.characters.active:
+        from src.core.character_settings import profile_from_config
+        profile = owner.characters.get(owner.characters.active)
+        updated = profile_from_config(candidate, profile["name"], profile["package"], profile["persona"])
+        updated["id"] = profile["id"]
+        owner.characters.save(updated)
     restart = any(previous[name] != candidate[name] for name in ("http", "websocket"))
     restart |= any(previous["voice"][name] != voice[name] for name in ("profiles", "port"))
     restart |= previous["voice"].get("qwen") != voice.get("qwen")

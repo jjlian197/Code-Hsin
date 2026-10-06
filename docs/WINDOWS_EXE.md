@@ -1,8 +1,16 @@
 # Windows EXE 使用与构建
 
-v1.2.0 为 Windows x64 便携版，无需安装 Python。下载 `Code-Hsin-v1.2.0-windows-x64.zip`，解压整个 `Hsin` 文件夹，双击 `Hsin.exe`。请保留 `_internal`，不要只复制 EXE；可为 EXE 创建桌面快捷方式。配置和运行状态保存在 EXE 同目录，建议放在可写的用户文件夹。
+v1.3.0 提供 Windows x64 安装包与便携 ZIP，无需安装 Python来运行桌面端。
+
+- 安装版：运行 `Code-Hsin-v1.3.0-windows-x64-setup.exe`，按当前用户安装，无需管理员权限。程序默认在 `%LOCALAPPDATA%\Programs\Hsin`，设置和状态在 `%LOCALAPPDATA%\Hsin`。升级替换程序资源，保留用户数据；卸载默认保留数据，交互卸载可选择清除。
+- 便携版：解压完整 `Code-Hsin-v1.3.0-windows-x64.zip`，运行 `Hsin.exe`。保留 `_internal` 和 `portable.txt`；首次启动创建 `data` 目录。复制整个文件夹可迁移数据，更新时保留旧 `data`，替换程序和资源。
+- `config.yaml` 是内置的心默认配置；自己的覆盖设置写入用户数据目录的 `config.local.yaml`，状态在其中的 `.runtime`，模型默认绑定到 `models/hsin/first/model.pmx`、`models/hsin/second/model.pmx`。`voice/profiles.json`和`inference`资源也在用户数据目录查找。
+- 旧版 EXE 旁的 `config.local.yaml`、六种持久状态、角色包目录和音色配置仅在新数据目录缺失时迁移；原文件保留，不迁移聊天音频缓存或运行日志。来自另一安装目录的数据需自行复制到新用户数据目录。
+- `--data-dir 路径`可指定独立数据目录，适合隔离验证。安装包和 ZIP 来自同一个构建目录。
 
 首次启动会打开引导，后续右键/托盘“设置…”修改。先选基础陪伴或连接 Hermes/DeepSeek，再选择自行取得的 PMX 文件；贴图须保留原目录结构，修改资源后关闭并重新打开 EXE。可分别选择两个形态。默认撑头侧躺FBX和一、二阶段躺下/起身过渡已内置，不需要另外复制动作。过渡按原双形态PMX校准，校验不匹配时需选择自己的过渡文件或重新校准；不分发PMX模型与贴图。参见源码文档 `SIDE_LYING_TRANSITION_PLAN.md`。
+
+“设置 → 角色管理”内置心的完整绑定与人设，可导入其他模型角色包、绑定后端/TTS、保存并一键启用；角色菜单也能切换完整配置。用户设置、凭据、好感度及导入资源不在程序更新中被覆盖。爱弥斯支持基础动作/表情，复杂手势未校准；程序包不附私有模型。合法资源包需另行确认来源与许可，不把禁止二次配布的现有PMX重新发布。
 
 ## 语音与识别
 
@@ -23,11 +31,11 @@ v1.2.0 为 Windows x64 便携版，无需安装 Python。下载 `Code-Hsin-v1.2.
 
 ```powershell
 python -m tools.prepare_release_voice
-python -m tools.build_windows_release --version 1.2.0
+python -m tools.build_windows_release --version 1.3.0 --installer "C:\path\to\ISCC.exe"
 ```
 
 前一步仅导出固定台词和筛选原声，不复制私人对话缓存。后一步使用 `packaging/Hsin.spec` 的显式清单，生成 `dist/Hsin/Hsin.exe` 与发布 ZIP、SHA256；资源目录、包结构和配置从当前项目加载，解压位置不依赖开发机路径。默认配置来自 `packaging/config.yaml`，从不复制 `config.local.yaml`。
 
-源码目录仍使用原来的启动脚本；EXE 直接运行，不依赖这些脚本。GUI 使用 PyInstaller 无控制台入口，早期启动异常记录在 `.runtime/startup-error.log`。路径按 [PyInstaller 运行时规则](https://pyinstaller.org/en/stable/runtime-information.html) 区分 EXE 旁的配置/状态和内部只读资源；标准流处理参照 [无控制台注意事项](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html)。
+源码目录仍使用原来的启动脚本；EXE 直接运行，不依赖这些脚本。GUI 使用 PyInstaller 无控制台入口，早期启动异常记录在用户数据目录的 `.runtime/startup-error.log`。路径按 [PyInstaller 运行时规则](https://pyinstaller.org/en/stable/runtime-information.html) 区分用户数据与内部只读资源；标准流处理参照 [无控制台注意事项](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html)。
 
 本发行包未做代码签名；Windows 可能显示未知发布者。macOS 和 visionOS 仍在 ROADMAP。

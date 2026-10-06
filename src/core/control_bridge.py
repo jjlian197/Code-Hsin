@@ -133,6 +133,8 @@ class ControlBridge(QObject):
                       "tts": window.tts.snapshot(), "audio": window.voice_player.snapshot(), "chat": window.chat.snapshot(), "stt": window.stt.snapshot(),
                       "pomodoro": window.pomodoro.snapshot(),
                       "mood": window.mood.snapshot(),
+                      "character": {"active": window.characters.active, "name": window.chat.character_name,
+                                    "switching": window.characters.pending is not None},
                       "voice_dataset_available": project_path(window.config["voice"]["manifest"]).is_file(),
                       "capabilities": ["message", "window", "background", "get_status", "touch_event", "speak", "tts_config", "chat", "chat_config", "stt_config", "pomodoro", "mood"]}
             if view.renderer_name == "pmx":
@@ -155,6 +157,17 @@ class ControlBridge(QObject):
             else:
                 raise CommandError("mood.action 需要 status、configure 或 open")
             return self.success("mood_status", window.mood.snapshot())
+        if kind == "character":
+            action = data.get("action", "list")
+            if action == "switch" and set(data) <= {"action", "id"}:
+                try:
+                    window.characters.activate(data.get("id"))
+                except StopIteration as exc:
+                    raise CommandError("角色不存在") from exc
+            elif action != "list" or set(data) - {"action"}:
+                raise CommandError("角色操作需要list或switch/id")
+            return self.success("character", {"active": window.characters.active,
+                "profiles": [{"id": item["id"], "name": item["name"]} for item in window.characters.profiles]})
         if kind == "pomodoro":
             action = data.get("action", "status")
             allowed = {"action"} | ({"phase"} if action == "start" else set(window.pomodoro.settings) if action == "configure" else set())

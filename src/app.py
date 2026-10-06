@@ -9,10 +9,13 @@ import sys
 def main(argv=None):
     parser = argparse.ArgumentParser(description="心 · Hsin 桌面精灵")
     parser.add_argument("--config", help="配置文件路径")
+    parser.add_argument("--data-dir", help="独立用户数据目录（默认由便携/安装模式决定）")
     parser.add_argument("--headless", action="store_true", help="使用离屏界面进行自动验证")
     parser.add_argument("--run-for", type=float, help="验证用：指定秒数后自动退出")
     parser.add_argument("--snapshot", help="验证用：导出窗口预览 PNG")
     args = parser.parse_args(argv)
+    if args.data_dir:
+        os.environ["HSIN_DATA_DIR"] = os.path.abspath(args.data_dir)
     if args.headless:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from loguru import logger

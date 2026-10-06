@@ -47,6 +47,43 @@ class PackagingTest(unittest.TestCase):
                 (root / 'image.png').write_bytes(b'override')
                 self.assertEqual(app_config.project_path('image.png'), root / 'image.png')
 
+    def test_portable_and_installed_data_roots_and_legacy_migration(self):
+        import yaml
+        from src.core.user_settings import settings_path
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            program, appdata = root / 'program', root / 'localappdata'
+            program.mkdir()
+            source = program / 'config.yaml'
+            source.write_text('sprite:\n  renderer: placeholder\n', encoding='utf8')
+            (program / 'config.local.yaml').write_text('voice:\n  language: ja\n', encoding='utf8')
+            (program / '.runtime').mkdir()
+            (program / '.runtime/mood.json').write_text('{"test": true}', encoding='utf8')
+            (program / '.runtime/private-cache.wav').write_bytes(b'cache')
+            with patch.object(app_config.sys, 'frozen', True, create=True), patch.object(app_config, 'PROJECT_ROOT', program), \
+                 patch.dict(os.environ, {'LOCALAPPDATA': str(appdata)}, clear=False):
+                (program / 'portable.txt').touch()
+                self.assertEqual(app_config.user_data_root(), program / 'data')
+                loaded = app_config.load_config(source)
+                self.assertEqual(settings_path(loaded), program / 'data/config.local.yaml')
+                self.assertEqual(loaded['voice']['language'], 'ja')
+                self.assertTrue((program / 'data/.runtime/mood.json').is_file())
+                self.assertFalse((program / 'data/.runtime/private-cache.wav').exists())
+                self.assertEqual(app_config.project_path('models/hsin/first/model.pmx'), program / 'data/models/hsin/first/model.pmx')
+                (program / 'data/config.local.yaml').write_text('voice:\n  language: zh\n', encoding='utf8')
+                self.assertEqual(app_config.load_config(source)['voice']['language'], 'zh')
+                (program / 'portable.txt').unlink()
+                self.assertEqual(app_config.user_data_root(), appdata / 'Hsin')
+
+    def test_release_default_character_is_complete_and_has_no_credentials(self):
+        config = app_config.read_yaml(app_config.PROJECT_ROOT / 'packaging/config.yaml')
+        self.assertEqual(set(config['sprite']['model']['forms']), {'first', 'second'})
+        self.assertTrue(config['chat']['persona'])
+        self.assertEqual(config['chat']['hermes']['profile'], 'hsin')
+        self.assertEqual(config['voice']['profiles'], 'voice/profiles.json')
+        self.assertNotIn('api_key', str(config))
+        self.assertNotIn('D:/Workspace', str(config))
+
     def test_preset_works_without_weights_profile_or_server_and_new_text_requires_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

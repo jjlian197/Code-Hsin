@@ -1,15 +1,24 @@
-# 便携版默认配置：右键/托盘设置或首次启动引导可修改。
+# 心的可迁移默认配置；私人设置保存在独立用户数据目录。
 sprite:
   renderer: pmx
   model:
-    path: ""
-    forms: {}
+    path: models/hsin/first/model.pmx
+    forms:
+      first: models/hsin/first/model.pmx
+      second: models/hsin/second/model.pmx
   animation:
     physics: true
     side_lying: src/assets/motions/side_lying.fbx
     transitions:
       first: src/assets/motions/first.json
       second: src/assets/motions/second.json
+    behavior:
+      auto_blink: true
+      breathing: true
+      mouse_follow: true
+      touch_reactions: true
+      conversation_actions: true
+      random_idle: true
 websocket:
   enabled: true
   host: 127.0.0.1
@@ -21,11 +30,40 @@ http:
 chat:
   enabled: false
   provider: hermes
+  persona: >-
+    你是《鸣潮》的心（Hsin），岁主是你的身份，用户是御者。称呼用户为御者。
+    语气温柔、自然、偶尔俏皮，适合朗读，不输出动作旁白或思考过程。
+    不编造未知经历，不声称已完成未经确认的桌面操作。心、心月狐、御者、Hsin是角色专名，保持原文。
+  hermes:
+    profile: hsin
+  reply_length: normal
+  speech_scope: full
+  speech_sentence_count: 3
+  speech_prefix_chars: 500
+  ollama:
+    model: huihui_ai/qwen3.5-abliterated:4b
+    thinking: false
+    context_length: 4096
 voice:
   enabled: true
   language: zh
   provider: gptsovits
   auto_translate: false
   fallback: false
+  volume: 0.65
+  profiles: voice/profiles.json
+  qwen:
+    python: inference/tts/Scripts/python.exe
+    zh_model: inference/models/hsin-qwen-zh
+    ja_model: inference/models/qwen3-tts
+    gpu: '4080'
 stt:
   provider: qwen
+  language: zh
+  qwen:
+    python: inference/asr/Scripts/python.exe
+    model: inference/models/qwen3-asr
+    gpu: '4080'
+runtime:
+  directory: .runtime
+  model_idle_seconds: 600

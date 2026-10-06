@@ -41,6 +41,7 @@ class ChatManager(QObject):
         self.generation, self.partial, self.messages = 0, "", []
         self.last_request, self.future = None, None
         self.backends = {}
+        self.character_id, self.character_name = "default", "心"
         self.closed = False
         self.speech = SentenceStream()
         self.loop = asyncio.new_event_loop()
@@ -66,7 +67,7 @@ class ChatManager(QObject):
 
     def snapshot(self):
         return {"provider": self.provider, "enabled": self.config.get("enabled", True), "providers": list(PROVIDERS), "busy": self.busy,
-                "last_request": self.last_request, "error": self.error, "warning": self.warning, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == "心" else None,
+                "last_request": self.last_request, "error": self.error, "warning": self.warning, "reply": self.messages[-1][1] if self.messages and self.messages[-1][0] == self.character_name else None,
                 "preferences": {key: self.config[key] for key in PREFERENCE_KEYS},
                 "speech": {"limit": self.speech.limit, "emitted_characters": self.speech.spoken_chars,
                            "limited": self.speech.limited, "scope": (self.last_request or {}).get("speech_scope", self.config["speech_scope"]),
@@ -117,24 +118,28 @@ class ChatManager(QObject):
                              "reply_length": self.config["reply_length"], "speech_scope": scope}
         self.messages.append(("御者", text.strip()))
         self.messages = self.messages[-24:]
-        self.future = asyncio.run_coroutine_threadsafe(self._chat(generation, text.strip(), language, provider, self.last_request["reply_length"]), self.loop)
+        backend_config = deepcopy(self.config[provider])
+        if provider in ("deepseek", "ollama") and self.config.get("persona"):
+            backend_config["persona"] = self.config["persona"]
+        self.future = asyncio.run_coroutine_threadsafe(self._chat(generation, text.strip(), language, provider, self.last_request["reply_length"], backend_config, self.character_id), self.loop)
         self.changed.emit()
         self.updated.emit()
         return dict(self.last_request)
 
-    async def _chat(self, generation, text, language, provider, reply_length):
+    async def _chat(self, generation, text, language, provider, reply_length, config=None, character_id=None):
         try:
-            config = self.config[provider]
+            config = config if config is not None else deepcopy(self.config[provider])
+            key = (character_id or self.character_id, provider)
             # 设置变更后在工作线程上更换客户端，避免跨线程改写会话。
             identity = json.dumps(config, sort_keys=True)
-            if provider not in self.backends or self.backends[provider][0] != identity:
-                if provider in self.backends and hasattr(self.backends[provider][1], "close"):
-                    await self.backends[provider][1].close()
-                self.backends[provider] = (identity, make_backend(provider, config))
+            if key not in self.backends or self.backends[key][0] != identity:
+                if key in self.backends and hasattr(self.backends[key][1], "close"):
+                    await self.backends[key][1].close()
+                self.backends[key] = (identity, make_backend(provider, config))
             async def delta(chunk):
                 if not self.closed:
                     self.progress.emit(generation, chunk)
-            backend = self.backends[provider][1]
+            backend = self.backends[key][1]
             reply = await backend.chat(text, language, delta, reply_length=reply_length)
             if not self.closed:
                 self.completed.emit(generation, (reply, language, getattr(backend, "warning", None)), None)
@@ -159,7 +164,7 @@ class ChatManager(QObject):
         self.busy, self.error, self.partial = False, error, ""
         if result:
             reply, language, self.warning = result
-            self.messages.append(("心", reply))
+            self.messages.append((self.character_name, reply))
             for sentence in self.speech.finish(reply):
                 self.sentence_ready.emit(generation, sentence, language)
             self.speech_finished.emit(generation, not self.speech.revised)

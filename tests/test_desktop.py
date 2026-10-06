@@ -33,6 +33,7 @@ class QtWindowTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.config = load_config()
+        self.config["_settings_path"] = str(Path(self.temp.name) / "config.local.yaml")
         self.config["sprite"]["renderer"] = "placeholder"
         # 窗口测试只使用占位渲染器；仓库不分发 PMX，测试也不依赖私有模型。
         model_fixture = Path(self.temp.name) / "model.pmx"
@@ -670,8 +671,7 @@ class APITest(QtWindowTestCase):
         (root / "config.local.yaml").write_text("chat:\n  provider: hermes\n", encoding="utf-8")
         dialog = MicrophoneDialog(self.window)
         dialog.hotwords.setPlainText("心\n心月狐\n御者\n心")
-        with patch("src.ui.microphone_dialog.PROJECT_ROOT", root):
-            dialog.save()
+        dialog.save()
         saved = yaml.safe_load((root / "config.local.yaml").read_text(encoding="utf-8"))
         self.assertEqual(saved["stt"]["hotwords"], ["心", "心月狐", "御者"])
         self.assertEqual(self.window.stt.config["hotwords"], ["心", "心月狐", "御者"])

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {RIG_SCHEMA} from './rig/schema.js';
 
 export const expressions = {
   normal: {}, happy: {'にこり':0.65,'口角上げ左':0.25,'口角上げ右':0.25},
@@ -18,11 +19,13 @@ const smooth = (v,target,speed,delta)=>v+(target-v)*(1-Math.exp(-speed*delta));
 const radians = v=>v*Math.PI/180;
 
 export class HsinBehavior {
-  constructor(mesh,options={},random=Math.random) {
+  constructor(mesh,options={},random=Math.random,rig=null,morphMap=null) {
     this.mesh=mesh;this.random=random;this.time=0;
+    this.expressions=morphMap?.expressions||expressions;this.morphAliases=morphMap?.aliases||{};
     this.settings={auto_blink:true,breathing:true,mouse_follow:true,touch_reactions:true,conversation_actions:true,random_idle:true,...options};
     this.parameters={};this.expression='normal';this.pointer={x:0,y:0};this.manualLook=false;this.gaze={x:0,y:0};
-    this.bones=new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
+    this.bones=rig ? new Map(RIG_SCHEMA.map(s=>[s.aliases[0],rig.get(s.id)]).filter(([,b])=>b)) :
+      new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
     this.boneBases=new Map();this.morphBases=new Map();this.ownedBones=new Set();this.ownedMorphs=new Set();
     this.blinkStart=null;this.nextBlink=2.0+this.random()*2;this.blink=0;this.breath=0;
     this.audio={value:0,active:false};this.lip={value:0,shape:'a',until:0};
@@ -35,9 +38,9 @@ export class HsinBehavior {
     this.idleAction=null;this.idleWeight=0;this.nextIdle=this.time+18+this.random()*27;
   }
 
-  setExpression(name) { if(!(name in expressions))return false;this.expression=name;return true; }
+  setExpression(name) { if(!(name in this.expressions))return false;this.expression=name;return true; }
   setMood(mood) {
-    if(!(mood.expression in expressions))return false;
+    if(!(mood.expression in this.expressions))return false;
     this.mood={expression:mood.expression,enabled:!!mood.enabled};return true;
   }
   setParameters(params) { Object.assign(this.parameters,params); }
@@ -60,7 +63,10 @@ export class HsinBehavior {
     for(const track of clip?.tracks||[]) {
       const bone=/\.bones\[(.*?)\]\.(quaternion|position)/.exec(track.name);
       const morph=/morphTargetInfluences\[(\d+)\]/.exec(track.name);
-      if(bone)this.ownedBones.add(bone[1]+'.'+bone[2]);
+      if(bone){
+        const actual=/^\d+$/.test(bone[1])?this.mesh.skeleton.bones[Number(bone[1])]?.name:bone[1];
+        if(actual)this.ownedBones.add(actual+'.'+bone[2]);
+      }
       if(morph)this.ownedMorphs.add(Number(morph[1]));
     }
   }
@@ -117,7 +123,7 @@ export class HsinBehavior {
 
   rotate(name,x=0,y=0,z=0) {
     const bone=this.bones.get(name);
-    if(!bone || this.ownedBones.has(name+'.quaternion'))return;
+    if(!bone || this.ownedBones.has(bone.name+'.quaternion'))return;
     if(!this.boneBases.has(bone))this.boneBases.set(bone,{quaternion:bone.quaternion.clone(),position:bone.position.clone()});
     bone.quaternion.multiply(this.offsetQuaternion.setFromEuler(this.offsetEuler.set(x,y,z)));
   }
@@ -155,13 +161,15 @@ export class HsinBehavior {
       }
     }
     const torso=this.bones.get('上半身');
-    if(torso&&!this.ownedBones.has('上半身.position')) {
+    if(torso&&!this.ownedBones.has(torso.name+'.position')) {
       if(!this.boneBases.has(torso))this.boneBases.set(torso,{quaternion:torso.quaternion.clone(),position:torso.position.clone()});
       torso.position.y+=this.breath*0.05;
     }
   }
 
-  morph(name,value) {
+  morph(name,value,resolveAlias=true) {
+    if(resolveAlias&&Object.hasOwn(this.morphAliases,name))name=this.morphAliases[name];
+    if(name===null)return;
     const index=this.mesh.morphTargetDictionary[name];
     if(index===undefined || this.ownedMorphs.has(index))return;
     if(!this.morphBases.has(index))this.morphBases.set(index,this.mesh.morphTargetInfluences[index]);
@@ -169,11 +177,11 @@ export class HsinBehavior {
   }
 
   applyFace() {
-    for(const [name,value] of Object.entries(expressions[this.expression]))this.morph(name,value);
+    for(const [name,value] of Object.entries(this.expressions[this.expression]||{}))this.morph(name,value,false);
     // 情绪作为柔和叠加层，手动表情/动作、VMD 所有权和触摸保持优先。
     if(this.expression==='normal'&&!this.manualMotion&&!this.activity.interacting&&!this.touchState)
       for(const [expression,weight] of Object.entries(this.moodWeights))
-        for(const [name,value] of Object.entries(expressions[expression]))this.morph(name,value*weight);
+        for(const [name,value] of Object.entries(this.expressions[expression]||{}))this.morph(name,value*weight,false);
     const p=this.parameters;
     const left=1-(p.ParamEyeLOpen??1),right=1-(p.ParamEyeROpen??1);
     const closure=Math.max(this.blink,Math.min(left,right));
@@ -205,7 +213,7 @@ export class HsinBehavior {
   }
 
   snapshot() {
-    const morphs={};for(const name of behaviorMorphNames){const index=this.mesh.morphTargetDictionary[name];if(index!==undefined)morphs[name]=this.mesh.morphTargetInfluences[index];}
+    const morphs={};for(const [name,index] of Object.entries(this.mesh.morphTargetDictionary))morphs[name]=this.mesh.morphTargetInfluences[index];
     return {settings:{...this.settings},expression:this.expression,gaze:{...this.gaze},pointer:{...this.pointer},
       blink:this.blink,breath:this.breath,mouth_open:this.mouthOpen,mouth_shape:this.mouthShape,audio_driven:this.audio.active,
       parameters:{...this.parameters},last_touch:this.lastTouch,touch_active:!!this.touchState,
