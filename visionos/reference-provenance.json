@@ -1,0 +1,21 @@
+{
+  "reference_project": "aemeath-spirit",
+  "head": "68ce5e0",
+  "date": "2026-10-07",
+  "scope": "Xcode project skeleton, volumetric scene, Aemeath placement, motion import and blendshape updates; new Hsin HTTPS client and prototype UI",
+  "files": [
+    {
+      "path": "visionos/AemeathCompanion.xcodeproj/project.pbxproj",
+      "sha256": "72ff36d7fdad17273cb067d85b0d7676e199862c20f7e0efff99618c2dd47fa6"
+    },
+    {
+      "path": "visionos/AemeathCompanion/App/CompanionStore.swift",
+      "sha256": "9b4c34987d9a3e280fef9061885690da585c12b059239268d40f373314223124"
+    },
+    {
+      "path": "visionos/AemeathCompanion/App/AemeathApp.swift",
+      "sha256": "c0a6b9647bdebfb2fa688d5821f4835d3f8eaf840fa824ace0ba572487dca1dd"
+    }
+  ],
+  "private_assets": "Copied locally for development; ignored by Git; no redistribution permission inferred."
+}

@@ -1,0 +1,777 @@
+import AVFoundation
+import Foundation
+import RealityKit
+import Security
+import SwiftUI
+
+@MainActor
+final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
+    @Published var bridgeURL = UserDefaults.standard.string(forKey: "bridgeURL") ?? "https://bridge.oieasklja.icu" {
+        didSet { if bridgeURL != oldValue { stopSpeech(disconnect: true); bridgeToken = credential(for: bridgeURL) ?? "" } }
+    }
+    @Published var bridgeToken = ""
+    @Published var gatewayURL = UserDefaults.standard.string(forKey: "gatewayURL") ?? "" {
+        didSet { if gatewayURL != oldValue { stopSpeech(disconnect: true); gatewayToken = credential(for: gatewayURL) ?? "" } }
+    }
+    @Published var gatewayToken = ""
+    @Published var inputText = ""
+    @Published var selectedCharacter = UserDefaults.standard.string(forKey: "selectedCharacter") ?? "aemeath" {
+        didSet { if selectedCharacter != oldValue { changeCharacter(); UserDefaults.standard.set(selectedCharacter, forKey: "selectedCharacter") } }
+    }
+    @Published var selectedForm = UserDefaults.standard.string(forKey: "selectedForm") ?? "first" {
+        didSet { if selectedForm != oldValue { changeCharacter(); UserDefaults.standard.set(selectedForm, forKey: "selectedForm") } }
+    }
+    @Published var chatProvider = "default" {
+        didSet { if chatProvider != oldValue { stopSpeech(); UserDefaults.standard.set(chatProvider, forKey: "chatProvider." + selectedCharacter) } }
+    }
+    var characterName: String { selectedCharacter == "hsin" ? "心" : "爱弥斯" }
+    var resourceDirectory: String? { selectedCharacter == "hsin" ? "Characters/Hsin" + (selectedForm == "second" ? "Second" : "First") : nil }
+    var modelResource: String { resourceDirectory ?? "Aemeath" }
+    private var turnWatchdog: Task<Void, Never>?
+    @Published var sttProvider = "remote" { didSet { if sttProvider != oldValue { stopSpeech() } } }
+    @Published private(set) var transcript = ""
+    @Published private(set) var fullReply = ""
+    @Published private(set) var isListening = false
+    private let recorder = MicrophoneRecorder()
+    private var recordingTask: Task<Void, Never>?
+    private var gatewayReader: Task<Void, Never>?
+    private var gatewaySocket: URLSessionWebSocketTask?
+    private var gatewayInterrupt: Task<Void, Error>?
+    private var gatewayTurn: String?
+    private var turnFinished = true
+    private struct AudioClip { let audio: Data; let text: String; let index: Int }
+    private var pendingAudio: [AudioClip] = []
+    @Published var language = "zh" { didSet { if language != oldValue { stopSpeech() } } }
+    @Published private(set) var status = "正在加载角色"
+    @Published private(set) var caption = ""
+    @Published private(set) var busy = false
+    @Published private(set) var modelReady = false
+    private var character: Entity?
+    private var faces: [Entity] = []
+    private var motionRoot: Entity?
+    private var motions: [String: AnimationResource] = [:]
+    private var motionDurations: [String: Double] = [:]
+    private var motionPlayback: AnimationPlaybackController?
+    private var returnToIdle: Task<Void, Never>?
+    private var speechTask: Task<Void, Never>?
+    private var player: AVAudioPlayer?
+    private var generation = 0
+    private var activeRequest: String?
+    private var nextBlink = Date().addingTimeInterval(3)
+    private var blinkStart: Date?
+
+    override init() {
+        super.init()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--character-hsin") { selectedCharacter = "hsin" }
+        if ProcessInfo.processInfo.arguments.contains("--form-second") { selectedForm = "second" }
+        #endif
+        bridgeToken = credential(for: bridgeURL) ?? ""
+        gatewayToken = credential(for: gatewayURL) ?? ""
+        importInstalledConnection()
+        chatProvider = UserDefaults.standard.string(forKey: "chatProvider." + selectedCharacter) ?? "default"
+        recorder.onLimit = { [weak self] in self?.finishRecording() }
+        recorder.onFailure = { [weak self] message in self?.stopSpeech(); self?.status = message }
+    }
+
+    private func changeCharacter() {
+        stopSpeech()
+        returnToIdle?.cancel()
+        modelReady = false
+        transcript = ""
+        caption = ""
+        fullReply = ""
+        chatProvider = UserDefaults.standard.string(forKey: "chatProvider." + selectedCharacter) ?? "default"
+        status = "正在加载" + characterName
+    }
+
+    private struct InstalledConnection: Decodable {
+        let bridgeURL: String
+        let gatewayURL: String
+        let token: String
+    }
+
+    private func importInstalledConnection() {
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HsinConnection.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        do {
+            let connection = try JSONDecoder().decode(InstalledConnection.self, from: Data(contentsOf: file))
+            _ = try endpoint(connection.bridgeURL)
+            _ = try endpoint(connection.gatewayURL, allowLocal: true)
+            guard connection.token.count >= 32,
+                  !connection.token.contains(where: { $0.isWhitespace }) else {
+                throw BridgeError.message("安装连接配置无效")
+            }
+            try storeCredential(connection.token, for: connection.bridgeURL)
+            try storeCredential(connection.token, for: connection.gatewayURL)
+            bridgeURL = connection.bridgeURL
+            gatewayURL = connection.gatewayURL
+            bridgeToken = connection.token
+            gatewayToken = connection.token
+            UserDefaults.standard.set(bridgeURL, forKey: "bridgeURL")
+            UserDefaults.standard.set(gatewayURL, forKey: "gatewayURL")
+            // This installer-owned file is consumed only after Keychain writes succeed.
+            try FileManager.default.removeItem(at: file)
+            let receipt: [String: Any] = ["credentialsStored":
+                credential(for: bridgeURL) == connection.token && credential(for: gatewayURL) == connection.token,
+                "bridgeURL": bridgeURL, "gatewayURL": gatewayURL]
+            try JSONSerialization.data(withJSONObject: receipt).write(
+                to: file.deletingLastPathComponent().appendingPathComponent("HsinConnectionReceipt.json"),
+                options: [.atomic, .completeFileProtection])
+        } catch { status = "安装连接配置导入失败，请检查连接设置" }
+    }
+
+    private func credentialQuery(for address: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "com.hsin.spatial.bridge",
+         kSecAttrAccount as String: address]
+    }
+
+    private func credential(for address: String) -> String? {
+        var query = credentialQuery(for: address)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let bytes = item as? Data else { return nil }
+        return String(data: bytes, encoding: .utf8)
+    }
+
+    private func storeCredential(_ token: String, for address: String) throws {
+        guard !token.isEmpty else { throw BridgeError.message("请填写访问令牌") }
+        let query = credentialQuery(for: address)
+        let attributes: [String: Any] = [kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        var saved = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if saved == errSecItemNotFound {
+            saved = SecItemAdd(query.merging(attributes) { _, value in value } as CFDictionary, nil)
+        }
+        guard saved == errSecSuccess else { throw BridgeError.message("钥匙串保存失败（\(saved)）") }
+    }
+
+    func saveConnection() {
+        do {
+            _ = try endpoint()
+            try storeCredential(bridgeToken, for: bridgeURL)
+            UserDefaults.standard.set(bridgeURL, forKey: "bridgeURL")
+            status = "连接已保存"
+        } catch { status = error.localizedDescription }
+    }
+
+    func load(into content: RealityViewContent) async {
+        let requestedResource = modelResource
+        let directory = resourceDirectory
+        modelReady = false
+        motions.removeAll()
+        guard let url = Bundle.main.url(forResource: selectedCharacter == "hsin" ? "Hsin" : "Aemeath", withExtension: "usdz", subdirectory: directory) else {
+            status = "缺少开发模型，请先运行资源准备工具"
+            return
+        }
+        do {
+            let loaded = try await Entity(contentsOf: url)
+            guard requestedResource == modelResource else { return }
+            loaded.scale = SIMD3<Float>(repeating: 0.35)
+            loaded.position = SIMD3<Float>(0, -0.53, 0)
+            character?.removeFromParent()
+            content.add(loaded)
+            character = loaded
+            faces = facialEntities(in: loaded)
+            NSLog("[HsinVision] Facial entities %@", faces.map { $0.name }.joined(separator: ","))
+            // Top-level "global scene animation" is a container animation, not the skinned target.
+            // Match the imported bone clip, as the reference's findWaveAnimation does.
+            motionRoot = animationBinding(in: loaded, name: "wave")?.entity
+            NSLog("[HsinVision] Model animations %@", animationInventory(in: loaded))
+            let motionDirectory = directory.map { $0 + "/Motions" } ?? "Motions"
+            if let manifestURL = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: motionDirectory),
+               let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: [String: Any]] {
+                motionDurations = manifest.compactMapValues { $0["duration"] as? Double }
+            }
+            for name in motionDurations.keys.sorted() {
+                if let clipURL = Bundle.main.url(forResource: name, withExtension: "usdz", subdirectory: motionDirectory) {
+                    let clip = try await Entity(contentsOf: clipURL)
+                    guard requestedResource == modelResource else { return }
+                    NSLog("[HsinVision] %@ animations %@", name, animationInventory(in: clip))
+                    motions[name] = animationBinding(in: clip, name: name)?.animation
+                }
+            }
+            NSLog("[HsinVision] Model root %@, motions %@", motionRoot?.name ?? "missing", motions.keys.sorted().joined(separator: ","))
+            guard motions["wave"] != nil, playMotion("idle") else {
+                status = "骨骼动作未加载，请检查模型与动作资源"
+                return
+            }
+            modelReady = true
+            status = characterName + "已就位；麦克风关闭"
+            #if DEBUG
+            // Native smoke runs use the same action as the UI button, without touching audio input.
+            if ProcessInfo.processInfo.arguments.contains("--motion-smoke-test") {
+                wave()
+                returnToIdle?.cancel()
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(min(2.5, (self?.motionDurations["wave"] ?? 3) * 0.4)))
+                    self?.motionPlayback?.pause()
+                }
+            }
+            #endif
+        } catch { status = "模型加载失败：\(error.localizedDescription)" }
+    }
+
+    private func facialEntities(in entity: Entity) -> [Entity] {
+        let current = entity.components[BlendShapeWeightsComponent.self] == nil ? [] : [entity]
+        return current + entity.children.flatMap { facialEntities(in: $0) }
+    }
+
+    private func animationBinding(in entity: Entity, name: String) -> (entity: Entity, animation: AnimationResource)? {
+        if let animation = entity.availableAnimations.first(where: {
+            ($0.name ?? "").lowercased().contains("/" + name.lowercased())
+        }) { return (entity, animation) }
+        for child in entity.children {
+            if let binding = animationBinding(in: child, name: name) { return binding }
+        }
+        return nil
+    }
+
+    private func animationInventory(in entity: Entity, path: String = "") -> String {
+        let currentPath = path + "/" + entity.name
+        let names = entity.availableAnimations.map { $0.name ?? "unnamed" }.joined(separator: ",")
+        return ([names.isEmpty ? "" : currentPath + ":" + names] + entity.children.map {
+            animationInventory(in: $0, path: currentPath)
+        }).filter { !$0.isEmpty }.joined(separator: " | ")
+    }
+
+    @discardableResult
+    private func playMotion(_ name: String) -> Bool {
+        guard let root = motionRoot, let animation = motions[name] else {
+            status = "动作不可用：\(name)"
+            return false
+        }
+        // Separately imported skeleton clips need the direct handoff used by the reference renderer.
+        // Stopping the previous controller after starting the new one can restore the bind pose.
+        motionPlayback = root.playAnimation(name == "idle" ? animation.repeat() : animation,
+                                             transitionDuration: 0, startsPaused: false)
+        NSLog("[HsinVision] Motion playback %@", name)
+        return true
+    }
+
+    func wave() { gesture("wave", label: "挥手") }
+
+    func gesture(_ name: String, label: String) {
+        returnToIdle?.cancel()
+        guard playMotion(name) else { return }
+        let actionStatus = label + "中"
+        if !busy && !isListening { status = actionStatus }
+        let duration = motionDurations[name] ?? 3
+        returnToIdle = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.playMotion("idle")
+            if self?.status == actionStatus { self?.status = label + "完成" }
+        }
+    }
+
+    func advanceFace() {
+        let now = Date()
+        if now >= nextBlink && blinkStart == nil { blinkStart = now }
+        var blink: Float = 0
+        if let start = blinkStart {
+            let elapsed = now.timeIntervalSince(start)
+            blink = Float(max(0, 1 - abs(elapsed - 0.12) / 0.12))
+            if elapsed > 0.24 { blinkStart = nil; nextBlink = now.addingTimeInterval(.random(in: 2...6)) }
+        }
+        var mouth: Float = 0
+        if let player, player.isPlaying {
+            player.updateMeters()
+            mouth = Float(max(0, min(1, (player.averagePower(forChannel: 0) + 48) / 36)))
+        }
+        for face in faces {
+        guard var component = face.components[BlendShapeWeightsComponent.self] else { continue }
+        for entry in component.weightSet {
+            var updated = entry
+            for (index, name) in entry.weightNames.enumerated() {
+                updated.weights[index] = name == "blink" ? blink * 1.12 : name == "a" ? mouth * 0.8 : 0
+            }
+            _ = component.weightSet.set(updated)
+        }
+        face.components.set(component)
+        }
+    }
+
+    private enum BridgeError: LocalizedError {
+        case message(String)
+        var errorDescription: String? { if case let .message(text) = self { return text }; return nil }
+    }
+    private struct Health: Decodable {
+        struct Voice: Decodable { let fingerprint: String }
+        let service: String
+        let `protocol`: Int
+        let voices: [String: Voice]
+    }
+
+    private func endpoint(_ address: String? = nil, allowLocal: Bool = false) throws -> URL {
+        let selected = address ?? bridgeURL
+        let components = URLComponents(string: selected)
+        let octets = components?.host?.split(separator: ".").compactMap { Int($0) } ?? []
+        let local = components?.host == "localhost" || (octets.count == 4 && octets.allSatisfy { 0...255 ~= $0 } &&
+            (octets[0] == 127 || octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) ||
+             (octets[0] == 172 && 16...31 ~= octets[1])))
+        guard let components, components.scheme == "https" || (allowLocal && local && components.scheme == "http"),
+              components.host != nil, components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.isEmpty || components.path == "/", let url = components.url else {
+            throw BridgeError.message("请填写 HTTPS 域名，不含路径或凭据")
+        }
+        return url
+    }
+
+    private func request(_ base: URL, path: String, token: String, payload: [String: Any]? = nil) throws -> URLRequest {
+        var request = URLRequest(url: base.appendingPathComponent(path))
+        request.timeoutInterval = 180
+        request.setValue("HsinVision/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let payload {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        }
+        return request
+    }
+
+    private func perform(_ request: URLRequest) async throws -> Data {
+        let (bytes, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw BridgeError.message("桥接请求失败（HTTP \(code)）")
+        }
+        guard bytes.count <= 24 * 1024 * 1024 else { throw BridgeError.message("音频响应过大") }
+        return bytes
+    }
+
+    func speakTest() {
+        stopSpeech()
+        let turn = generation
+        let selectedLanguage = language
+        let role = selectedCharacter
+        let text = role == "hsin"
+            ? (selectedLanguage == "zh" ? "御者，心正在空间里陪伴你。" : "御者、心はそばにいるよ。")
+            : (selectedLanguage == "zh" ? "父亲，爱弥斯正在空间里陪伴你。" : "父さん、エイメスはそばにいるよ。")
+        let token = bridgeToken
+        guard !token.isEmpty else { status = "请填写桥接访问令牌"; return }
+        busy = true
+        status = "正在合成"
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let base = try endpoint()
+                let health = try JSONDecoder().decode(Health.self, from: await perform(request(base, path: "health", token: token)))
+                guard health.service == "hsin-pc-voice", health.protocol == 1,
+                      let voice = health.voices[role] else { throw BridgeError.message("桥接音色或协议不匹配") }
+                try Task.checkCancellation()
+                let requestID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                activeRequest = requestID
+                let audio = try await perform(request(base, path: "v1/tts", token: token, payload: [
+                    "request_id": requestID, "voice_id": role, "voice_fingerprint": voice.fingerprint,
+                    "text": text, "language": selectedLanguage, "speed": 1.0]))
+                try Task.checkCancellation()
+                guard turn == generation else { return }
+                activeRequest = nil
+                let next = try AVAudioPlayer(data: audio)
+                next.isMeteringEnabled = true
+                next.delegate = self
+                guard next.play() else { throw BridgeError.message("音频未能播放") }
+                player = next
+                caption = text
+                status = "正在播放"
+            } catch {
+                guard turn == generation else { return }
+                busy = false
+                activeRequest = nil
+                status = error.localizedDescription
+            }
+        }
+    }
+
+
+    func saveGatewayConnection() {
+        do {
+            _ = try endpoint(gatewayURL, allowLocal: true)
+            try storeCredential(gatewayToken, for: gatewayURL)
+            UserDefaults.standard.set(gatewayURL, forKey: "gatewayURL")
+            status = "Mac 网关连接已保存"
+        } catch { status = error.localizedDescription }
+    }
+
+    private struct GatewayEvent: Decodable {
+        let type: String
+        let service: String?
+        let `protocol`: Int?
+        let turn_id: String?
+        let index: Int?
+        let text: String?
+        let reply: String?
+        let audio_base64: String?
+        let audio_error: String?
+        let error: String?
+    }
+
+    private func connectGateway() async throws {
+        try await gatewayInterrupt?.value
+        gatewayInterrupt = nil
+        if gatewaySocket != nil { return }
+        guard !gatewayToken.isEmpty else { throw BridgeError.message("请配置 Mac 对话网关与令牌") }
+        let base = try endpoint(gatewayURL, allowLocal: true)
+        var components = URLComponents(url: base.appendingPathComponent("ws"), resolvingAgainstBaseURL: false)!
+        components.scheme = base.scheme == "https" ? "wss" : "ws"
+        var connection = URLRequest(url: components.url!)
+        connection.timeoutInterval = 10
+        connection.setValue("Bearer \(gatewayToken)", forHTTPHeaderField: "Authorization")
+        connection.setValue("HsinVision/1.0", forHTTPHeaderField: "User-Agent")
+        let socket = URLSession.shared.webSocketTask(with: connection)
+        socket.maximumMessageSize = 24 * 1024 * 1024
+        socket.resume()
+        do {
+            let welcome = try await decodeEvent(socket.receive())
+            guard welcome.type == "welcome", welcome.service == "hsin-vision-gateway", welcome.protocol == 1 else {
+                throw BridgeError.message("Mac 网关协议不匹配")
+            }
+            try Task.checkCancellation()
+            gatewaySocket = socket
+            gatewayReader = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    while !Task.isCancelled {
+                        let event = try await decodeEvent(socket.receive())
+                        guard gatewaySocket === socket else { return }
+                        applyGatewayEvent(event)
+                    }
+                } catch {
+                    guard gatewaySocket === socket else { return }
+                    stopSpeech(disconnect: true)
+                    status = "Mac 网关连接中断，请重新连接"
+                }
+            }
+        } catch {
+            socket.cancel(with: .goingAway, reason: nil)
+            throw error
+        }
+    }
+
+    private func decodeEvent(_ message: URLSessionWebSocketTask.Message) throws -> GatewayEvent {
+        let bytes: Data
+        switch message {
+        case .data(let content): bytes = content
+        case .string(let text): bytes = Data(text.utf8)
+        @unknown default: throw BridgeError.message("网关事件无效")
+        }
+        return try JSONDecoder().decode(GatewayEvent.self, from: bytes)
+    }
+
+    func sendText() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !isListening, !text.isEmpty, text.count <= 4000 else { return }
+        inputText = ""
+        beginConversation(["type": "user_text", "text": text])
+    }
+
+    private func beginConversation(_ fields: [String: Any]) {
+        guard !busy else { return }
+        busy = true
+        turnFinished = false
+        caption = ""
+        fullReply = ""
+        transcript = fields["text"] as? String ?? ""
+        let turn = generation
+        status = fields["type"] as? String == "user_audio" ? "正在识别" : "正在回复"
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await connectGateway()
+                guard turn == generation, let socket = gatewaySocket else { return }
+                let identity = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                gatewayTurn = identity
+                var payload = fields.merging(["turn_id": identity, "character_id": selectedCharacter,
+                    "language": language, "stt_provider": sttProvider]) { _, value in value }
+                if chatProvider != "default" { payload["chat_provider"] = chatProvider }
+                let bytes = try JSONSerialization.data(withJSONObject: payload)
+                try await socket.send(.string(String(decoding: bytes, as: UTF8.self)))
+                armTurnWatchdog(seconds: fields["type"] as? String == "user_audio" ? 105 : 260)
+            } catch {
+                guard turn == generation else { return }
+                stopSpeech()
+                status = "无法连接 Mac 网关，请检查地址与令牌"
+            }
+        }
+    }
+
+    private func applyGatewayEvent(_ event: GatewayEvent) {
+        guard event.turn_id == gatewayTurn, gatewayTurn != nil else { return }
+        switch event.type {
+        case "transcript":
+            transcript = event.text ?? ""
+            status = "正在回复"
+            armTurnWatchdog(seconds: 260)
+        case "reply_delta": fullReply += event.text ?? ""
+        case "sentence_audio":
+            if let encoded = event.audio_base64, let audio = Data(base64Encoded: encoded), !audio.isEmpty {
+                pendingAudio.append(AudioClip(audio: audio, text: event.text ?? "", index: event.index ?? -1))
+                playNextSentence()
+            } else {
+                caption = event.text ?? ""
+                status = event.audio_error ?? "本句音频无效"
+            }
+        case "speech_reset":
+            pendingAudio.removeAll()
+            player?.stop()
+            player = nil
+            fullReply = event.reply ?? ""
+            caption = fullReply
+        case "turn_done":
+            turnWatchdog?.cancel()
+            turnWatchdog = nil
+            turnFinished = true
+            fullReply = event.reply ?? fullReply
+            if player == nil && pendingAudio.isEmpty { busy = false; status = "回复完成" }
+        case "turn_error":
+            let message = event.error ?? "对话失败"
+            stopSpeech()
+            status = message
+        default: break
+        }
+    }
+
+    private func acknowledgePlayback(_ index: Int, discarded: Bool = false) {
+        if let socket = gatewaySocket, let identity = gatewayTurn,
+           let acknowledgement = try? JSONSerialization.data(withJSONObject: [
+                "type": discarded ? "audio_discarded" : "playback_started", "turn_id": identity, "index": index]) {
+            Task { try? await socket.send(.string(String(decoding: acknowledgement, as: UTF8.self))) }
+        }
+    }
+
+    private func armTurnWatchdog(seconds: Double) {
+        turnWatchdog?.cancel()
+        let identity = gatewayTurn
+        let recognition = status == "正在识别"
+        turnWatchdog = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            guard let self, gatewayTurn == identity, !turnFinished else { return }
+            stopSpeech()
+            status = recognition ? "识别超时，请检查语音服务或切换识别方式" : "回复超时，请检查聊天后端"
+        }
+    }
+
+    private func playNextSentence() {
+        guard player == nil, !pendingAudio.isEmpty else { return }
+        let clip = pendingAudio.removeFirst()
+        do {
+            let next = try AVAudioPlayer(data: clip.audio)
+            next.isMeteringEnabled = true
+            next.delegate = self
+            guard next.play() else { throw BridgeError.message("音频播放失败") }
+            player = next
+            acknowledgePlayback(clip.index)
+            caption = clip.text
+            status = "正在播放"
+        } catch {
+            acknowledgePlayback(clip.index, discarded: true)
+            status = "本句音频播放失败"
+            playNextSentence()
+        }
+    }
+
+    func toggleRecording() {
+        if isListening { finishRecording(); return }
+        guard !busy, recordingTask == nil else { return }
+        let turn = generation
+        busy = true
+        status = "正在准备麦克风"
+        recordingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { recordingTask = nil }
+            do {
+                try await connectGateway()
+                try await recorder.start()
+                guard turn == generation else { recorder.cancel(); return }
+                busy = false
+                isListening = true
+                transcript = ""
+                status = "正在收音，再按一次结束（最多 25 秒）"
+            } catch {
+                recorder.cancel()
+                guard turn == generation else { return }
+                busy = false
+                status = "麦克风未启动，请检查权限与输入设备"
+            }
+        }
+    }
+
+    private func finishRecording() {
+        guard isListening else { return }
+        isListening = false
+        do {
+            let audio = try recorder.finish()
+            beginConversation(["type": "user_audio", "audio_base64": audio.base64EncodedString()])
+        } catch { status = "未收到有效录音，请检查麦克风" }
+    }
+
+    func stopSpeech(disconnect: Bool = false) {
+        generation += 1
+        turnWatchdog?.cancel()
+        turnWatchdog = nil
+        recordingTask?.cancel()
+        recordingTask = nil
+        recorder.cancel()
+        isListening = false
+        gatewayTurn = nil
+        if disconnect {
+            gatewayInterrupt?.cancel()
+            gatewayInterrupt = nil
+            gatewayReader?.cancel()
+            gatewayReader = nil
+            gatewaySocket?.cancel(with: .goingAway, reason: nil)
+            gatewaySocket = nil
+        } else if let socket = gatewaySocket {
+            let previous = gatewayInterrupt
+            // Preserve character histories while ordering interruption before the next turn.
+            gatewayInterrupt = Task {
+                try await previous?.value
+                try await socket.send(.string("{\"type\":\"interrupt\"}"))
+            }
+        }
+        pendingAudio.removeAll()
+        turnFinished = true
+        speechTask?.cancel()
+        speechTask = nil
+        player?.stop()
+        player = nil
+        busy = false
+        caption = ""
+        if let identity = activeRequest, let base = try? endpoint(),
+           let cancellation = try? request(base, path: "v1/cancel", token: bridgeToken, payload: ["request_id": identity]) {
+            Task { _ = try? await URLSession.shared.data(for: cancellation) }
+        }
+        activeRequest = nil
+        status = modelReady ? "已停止；麦克风关闭" : status
+        advanceFace()
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            guard let self, self.player === player else { return }
+            self.player = nil
+            if !flag { self.status = "播放失败" }
+            self.playNextSentence()
+            if self.player == nil && self.pendingAudio.isEmpty && self.turnFinished {
+                self.busy = false
+                self.status = flag ? "播放完成" : "播放失败"
+            }
+            self.advanceFace()
+        }
+    }
+}
+
+/// Native format capture stays on the audio thread; only copied samples cross to the main actor.
+@MainActor
+private final class MicrophoneRecorder {
+    private let engine = AVAudioEngine()
+    private var capturedSamples: [Float] = []
+    private var inputFormat: AVAudioFormat?
+    private var captureGeneration = 0
+    private var tapInstalled = false
+    private var deadline: Task<Void, Never>?
+    var onLimit: (() -> Void)?
+    var onFailure: ((String) -> Void)?
+
+    func start() async throws {
+        cancel()
+        guard await AVAudioApplication.requestRecordPermission() else { throw CaptureError.permission }
+        try Task.checkCancellation()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0, format.commonFormat == .pcmFormatFloat32 else {
+            throw CaptureError.format
+        }
+        inputFormat = format
+        let identity = captureGeneration
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            guard let channels = buffer.floatChannelData else { return }
+            let count = Int(buffer.frameLength)
+            let channelCount = Int(buffer.format.channelCount)
+            var copied = [Float](repeating: 0, count: count)
+            for index in 0..<count {
+                for channel in 0..<channelCount { copied[index] += channels[channel][index] / Float(channelCount) }
+            }
+            Task { @MainActor [weak self] in
+                guard let self, self.captureGeneration == identity else { return }
+                let remaining = max(0, Int(format.sampleRate * 25) - self.capturedSamples.count)
+                self.capturedSamples.append(contentsOf: copied.prefix(remaining))
+                if remaining <= copied.count { self.onLimit?() }
+            }
+        }
+        tapInstalled = true
+        do { engine.prepare(); try engine.start() }
+        catch { cancel(); throw error }
+        deadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self, self.captureGeneration == identity else { return }
+            if self.capturedSamples.isEmpty { self.onFailure?("未收到麦克风输入"); return }
+            try? await Task.sleep(for: .seconds(20))
+            guard !Task.isCancelled, self.captureGeneration == identity else { return }
+            self.onLimit?()
+        }
+    }
+
+    func cancel() {
+        captureGeneration += 1
+        deadline?.cancel()
+        deadline = nil
+        engine.stop()
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        capturedSamples.removeAll(keepingCapacity: false)
+        inputFormat = nil
+    }
+
+    func finish() throws -> Data {
+        let samples = capturedSamples
+        let format = inputFormat
+        cancel()
+        guard let format, !samples.isEmpty,
+              let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate,
+                                       channels: 1, interleaved: false),
+              let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true),
+              let input = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(samples.count)),
+              let converter = AVAudioConverter(from: mono, to: target),
+              let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096) else { throw CaptureError.format }
+        input.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { source in
+            if let pointer = source.baseAddress { input.floatChannelData![0].update(from: pointer, count: samples.count) }
+        }
+        var supplied = false
+        var pcm = Data()
+        // The input-block API drains the resampler; convenience conversion cannot change sample rates.
+        while true {
+            var conversionError: NSError?
+            output.frameLength = 0
+            let conversion = converter.convert(to: output, error: &conversionError) { _, state in
+                if supplied { state.pointee = .endOfStream; return nil }
+                supplied = true
+                state.pointee = .haveData
+                return input
+            }
+            guard conversionError == nil else { throw CaptureError.format }
+            if output.frameLength > 0, let channel = output.int16ChannelData?[0] {
+                pcm.append(Data(bytes: channel, count: Int(output.frameLength) * 2))
+            }
+            if conversion == .endOfStream { break }
+            guard conversion == .haveData else { throw CaptureError.format }
+        }
+        guard !pcm.isEmpty, pcm.count <= 25 * 16000 * 2 else { throw CaptureError.format }
+        var wav = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { wav.append(contentsOf: $0) } }
+        append(UInt32(36 + pcm.count)); wav.append(Data("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(16000))
+        append(UInt32(32000)); append(UInt16(2)); append(UInt16(16)); wav.append(Data("data".utf8))
+        append(UInt32(pcm.count)); wav.append(pcm)
+        return wav
+    }
+
+    private enum CaptureError: Error { case permission, format }
+}

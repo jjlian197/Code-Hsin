@@ -2,7 +2,7 @@
 
 ## 当前架构
 
-本项目为 PyQt6 + QWebEngine + Three.js/MMDLoader + Ammo/Bullet 的桌面精灵，直接加载原始 PMX。入口是 `python -m src.main`，不是 Live2D 项目。平台共用同一源码树，Windows 正式发行基线为 v1.3.0；macOS 源码和开发应用包已在 Apple Silicon 验证，详情见 `docs/MACOS.md`。
+本项目为 PyQt6 + QWebEngine + Three.js/MMDLoader + Ammo/Bullet 的桌面精灵，直接加载原始 PMX。入口是 `python -m src.main`，不是 Live2D 项目。平台共用同一源码树，Windows 正式发行基线为 v1.3.0；macOS 源码和开发应用包已在 Apple Silicon 验证，详情见 `docs/MACOS.md`。visionOS 已进入独立 SwiftUI/RealityKit 原型开发阶段，方案见 `docs/VISIONOS_PLAN.md`。
 
 - `src/app.py`：Qt 主线程、启动锁、本机服务与退出。
 - `src/core/sprite_window.py`：窗口、共享菜单、角色交互与各管理器。

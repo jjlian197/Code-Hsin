@@ -118,3 +118,7 @@ python -m src.main --run-for 25 --snapshot .runtime/pmx-first-preview.png
 源码采用 GPL-3.0，第三方组件与角色素材按各自许可使用，见 [LICENSE](LICENSE) 与 [第三方说明](docs/DEPENDENCY_LICENSES.md)。
 
 macOS 的 PC 语音推理与智谱 STT 选项见 [PC 语音桥接指南](docs/MACOS_PC_VOICE.md)。
+
+## visionOS
+
+原生 SwiftUI／RealityKit 版本位于 `visionos/`。角色默认后端随切换改变：心使用 PC 已有 Hermes Agent，爱弥斯使用 Aemeath 配置的 OpenClaw；PC／智谱 STT 仍可选择。详见 [角色后端](docs/VISIONOS_CHARACTER_BACKENDS.md)、[Hsin 私有资源转换](docs/VISIONOS_HSIN_ASSETS.md) 和 [macOS 功能迁移计划](docs/VISIONOS_PARITY_PLAN.md)。

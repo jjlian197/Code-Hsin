@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>NSLocalNetworkUsageDescription</key><string>连接你的 Mac 对话网关。</string><key>NSMicrophoneUsageDescription</key><string>只有主动按键说话时才采集麦克风，用于 PC 或智谱识别。</string><key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict></dict></plist>

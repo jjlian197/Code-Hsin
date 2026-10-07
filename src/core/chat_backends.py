@@ -90,7 +90,7 @@ class DeepSeekBridge:
 class OpenClawBridge:
     def __init__(self, config):
         self.config = config
-        self.session_key = f"agent:{config.get('agent', 'hsin')}:desktop-{uuid.uuid4().hex}"
+        self.session_key = config.get("session") or f"agent:{config.get('agent', 'hsin')}:desktop-{uuid.uuid4().hex}"
 
     async def _socket(self, url):
         # 仅连接已有网关，不启动或管理 OpenClaw / WSL 服务。

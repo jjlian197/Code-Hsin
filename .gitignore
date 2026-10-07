@@ -49,3 +49,12 @@ dist/
 release/
 voice/presets/
 voice/recordings/
+
+# visionOS build products and private character resources
+visionos/.build*/
+visionos/HsinVision/Resources/*.usdz
+visionos/HsinVision/Resources/Motions/
+visionos/**/*.xcuserstate
+visionos/**/xcuserdata/
+
+visionos/HsinVision/Resources/Characters/
