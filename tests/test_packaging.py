@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from unittest.mock import Mock, call
@@ -17,7 +18,7 @@ class PackagingTest(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows 冻结 DLL 搜索目录')
     def test_external_gpt_environment_is_cleaned_and_dll_directory_restored_on_launch_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             bundle = root / '_internal'
             synth = LocalSynthesizer(root / 'profiles.json', root)
             kernel = Mock()
@@ -37,7 +38,7 @@ class PackagingTest(unittest.TestCase):
 
     def test_frozen_resource_fallback_keeps_configuration_beside_exe(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             resource = root / '_internal'
             resource.mkdir()
             (resource / 'image.png').write_bytes(b'image')
@@ -51,7 +52,7 @@ class PackagingTest(unittest.TestCase):
         import yaml
         from src.core.user_settings import settings_path
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             program, appdata = root / 'program', root / 'localappdata'
             program.mkdir()
             source = program / 'config.yaml'
@@ -60,7 +61,7 @@ class PackagingTest(unittest.TestCase):
             (program / '.runtime').mkdir()
             (program / '.runtime/mood.json').write_text('{"test": true}', encoding='utf8')
             (program / '.runtime/private-cache.wav').write_bytes(b'cache')
-            with patch.object(app_config.sys, 'frozen', True, create=True), patch.object(app_config, 'PROJECT_ROOT', program), \
+            with patch.object(app_config, 'sys', SimpleNamespace(frozen=True, platform='win32')), patch.object(app_config, 'PROJECT_ROOT', program), \
                  patch.dict(os.environ, {'LOCALAPPDATA': str(appdata)}, clear=False):
                 (program / 'portable.txt').touch()
                 self.assertEqual(app_config.user_data_root(), program / 'data')
@@ -86,7 +87,7 @@ class PackagingTest(unittest.TestCase):
 
     def test_preset_works_without_weights_profile_or_server_and_new_text_requires_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             manifest = root / 'manifest.json'
             text = '御者，我在这里。'
             (root / 'voice.wav').write_bytes(sample_wave())

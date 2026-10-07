@@ -1,4 +1,4 @@
-"""Windows 无控制台入口；常规日志就绪前保存启动异常。"""
+"""桌面应用入口；常规日志就绪前保存启动异常。"""
 import sys
 from pathlib import Path
 import traceback

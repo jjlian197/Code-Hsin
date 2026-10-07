@@ -19,6 +19,7 @@ voice/**/configs/hsin_voice.yaml
 voice/**/configs/reference_request.json
 voice/**/review.html
 __pycache__/
+.DS_Store
 *.part
 .venv/
 .runtime/

@@ -18,6 +18,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     config = load_config()
     config["voice"]["enabled"] = False
+    config["chat"]["enabled"] = False
     config["sprite"]["animation"]["physics"] = False
     config["sprite"]["animation"]["behavior"] = {key: False for key in (
         "auto_blink", "breathing", "mouse_follow", "touch_reactions", "random_idle", "conversation_actions")}
@@ -50,16 +51,39 @@ def main():
     async def capture(label):
         await asyncio.sleep(.1)
         dest = output / (label + ".png")
-        await probe.call(lambda f: f.set_result(window.sprite_view.grab().save(str(dest))))
+        def inspect(future):
+            pixmap = window.sprite_view.grab()
+            assert pixmap.save(str(dest))
+            image = pixmap.toImage()
+            luminances = []
+            for y in range(0, image.height(), 4):
+                for x in range(0, image.width(), 4):
+                    color = image.pixelColor(x, y)
+                    if color.alpha() == 255:
+                        luminances.append(.2126 * color.red() + .7152 * color.green() + .0722 * color.blue())
+            assert luminances, "模型必须实际可见"
+            future.set_result(sum(luminances) / len(luminances))
+        luminance = await probe.call(inspect)
         report["captures"][label] = str(dest)
+        return luminance
+
+    async def compare_lighting(character):
+        await probe.evaluate("window.HsinPmxDebug.lighting(false)")
+        before = await capture(character + "-light-before")
+        await probe.evaluate("window.HsinPmxDebug.lighting(true)")
+        after = await capture(character + "-light-after")
+        assert after > before + 2, f"补光应使画面变亮：{before} → {after}"
+        report.setdefault("lighting", {})[character] = {"before": before, "after": after}
 
     async def verify():
         await loaded()
         report["states"]["hsin_before"] = await tick(10)
+        await compare_lighting("hsin")
         def select(future):
             menu = QMenu(window)
             window._populate_characters(menu)
-            action = next(a for a in menu.actions() if a.text() == "爱弥斯")
+            action = next((a for a in menu.actions() if a.text() == "爱弥斯 · 完整配置"), None)
+            assert action is not None, "角色菜单应包含爱弥斯完整配置"
             action.trigger()
             menu.deleteLater()
             future.set_result(True)
@@ -72,6 +96,7 @@ def main():
         assert await probe.call(lambda f: f.set_result(not window._motion_actions["side_lying"].isEnabled()))
         await probe.call(lambda f: (window.set_view_mode("head_front"), f.set_result(None)))
         await tick(30)
+        await compare_lighting("aemeath")
         for expression in ("normal", "happy", "content", "star_eyes", "heart_eyes"):
             await probe.call(lambda f, e=expression: (window.set_expression(e), f.set_result(None)))
             state = await tick(8)

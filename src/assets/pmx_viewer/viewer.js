@@ -11,6 +11,7 @@ import {matchRig} from './rig/matcher.js';
 import {createRigAccess} from './rig/access.js';
 import {validateMorphMap,mappedMorphNames} from './rig/morphs.js';
 import {applyHsinChestRig,hsinForm,runningClip} from './hsin_motion.js';
+import {createDesktopLighting} from './lighting.js';
 
 let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
 let viewMode='full', headTarget=null, headScale=1;
@@ -25,13 +26,7 @@ renderer.setClearColor(0x000000,0);
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.outputColorSpace=THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
-scene.add(new THREE.AmbientLight(0xffffff,1.0));
-const key=new THREE.DirectionalLight(0xffffff,0.85);
-key.position.set(-8,25,30);
-scene.add(key);
-const fill=new THREE.DirectionalLight(0xffe7ed,0.25);
-fill.position.set(8,15,10);
-scene.add(fill);
+const lighting=createDesktopLighting(scene);
 
 function render(){renderer.render(scene,camera);}
 function reportRuntime(){
@@ -330,6 +325,7 @@ window.HsinPmx={loadModel,setExpression,playMotion,setViewMode,
   dispose:()=>{stopped=true;generation++;dispose(mesh);mesh=null;renderer.dispose();}};
 // 开发检查只改镜头、不改姿态；正常窗口不会调用。重置后仍沿用产品原有取景。
 window.HsinPmxDebug={
+  lighting:brighter=>{lighting.preset(brighter);render();},
   // 实际求值后的语义骨坐标，用于新角色骨轴/姿态检查，不写回 PMX。
   rigGeometry:()=>{
     if(!runtime?.rig)return null;

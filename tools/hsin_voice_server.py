@@ -8,6 +8,8 @@ import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.core.voice_catalog import voice_profiles
 
 
 def main():
@@ -35,11 +37,12 @@ def main():
         nonlocal engine, active, active_identity, torch_initialized
         language, text = request.get("language"), request.get("text")
         speed = request.get("speed", 1.0)
-        if language not in profiles["profiles"] or not isinstance(text, str) or not 1 <= len(text.strip()) <= 500:
+        selected_profiles = voice_profiles(profiles, request.get("voice_id", "hsin"))
+        if language not in selected_profiles or not isinstance(text, str) or not 1 <= len(text.strip()) <= 500:
             raise ValueError("需要 zh/ja 语言和 1–500 字符的文本")
         if type(speed) not in (int, float) or not 0.5 <= speed <= 2:
             raise ValueError("语速需要在 0.5–2 之间")
-        profile = profiles["profiles"][language]
+        profile = selected_profiles[language]
         with lock:
             if not torch_initialized:
                 import torch
@@ -79,8 +82,11 @@ def main():
             params = {"text": text.strip(), "text_lang": language, "prompt_lang": language,
                       "prompt_text": profile["prompt_text"], "ref_audio_path": profile["reference_audio"],
                       "text_split_method": "cut5", "batch_size": 1, "top_k": 5, "top_p": 1,
-                      "temperature": 1, "speed_factor": speed, "seed": 1234,
+                      "temperature": 1, "speed_factor": speed * profile.get("speed_factor", 1), "seed": 1234,
                       "parallel_infer": False, "repetition_penalty": 1.35, "streaming_mode": False}
+            for parameter in ("top_k", "top_p", "temperature", "sample_steps"):
+                if parameter in profile:
+                    params[parameter] = profile[parameter]
             chunks = list(engine.run(params))
             if not chunks or any(rate != chunks[0][0] for rate, _ in chunks):
                 raise RuntimeError("合成未产生一致的音频")
@@ -120,7 +126,7 @@ def main():
                 if self.path == "/warmup":
                     language = payload.get("language")
                     text = {"zh": "御者，我在这里。", "ja": "御者、ここにいます。"}.get(language)
-                    synthesize({"language": language, "text": text})
+                    synthesize({"language": language, "text": text, "voice_id": payload.get("voice_id", "hsin")})
                     return self.send(200, {"language": language, "ready": True})
                 audio = synthesize(payload)
                 self.send(200, audio, "audio/wav")

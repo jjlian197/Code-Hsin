@@ -3,21 +3,24 @@ from array import array
 from collections import deque
 from copy import deepcopy
 import math
+import sys
 import threading
 import time
 
-from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QMicrophonePermission, QObject, QTimer, Qt, pyqtSignal
+from loguru import logger
 from PyQt6.QtMultimedia import QAudio, QAudioFormat, QAudioSource, QMediaDevices
 from src.core.speech_recognizer import SpeechRecognizer
 from src.core.stt_hotwords import hotwords
+from src.core.audio_pcm import SpeechPCMConverter
 
 
 def validate_stt(config):
     if not isinstance(config, dict):
         raise ValueError("stt 需要配置对象")
     hotwords(config)
-    if config.get("provider", "auto") not in {"auto", "zhipu", "qwen"}:
-        raise ValueError("识别引擎需要 auto、zhipu 或 qwen")
+    if config.get("provider", "auto") not in {"auto", "zhipu", "qwen", "remote"}:
+        raise ValueError("识别引擎需要 auto、zhipu、qwen 或 remote")
     if config.get("provider") == "qwen":
         from src.core.app_config import validate_qwen
         validate_qwen(config.get("qwen"), ("python", "model", "gpu"))
@@ -95,12 +98,19 @@ class STTManager(QObject):
         self.last_text = ""
         self.actual_provider = ""
         self.level = 0.0
+        self.permission = "unchecked"
+        self._permission_pending = False
+        self._capture_started = 0.0
+        self._received_bytes = 0
+        self._last_meter_update = 0.0
+        self._pcm_converter = None
+        self.capture_format = ""
         self.source = self.io = None
         self._buffer = bytearray()
         self._generation = 0
         self._closed = False
         self._cooldown = 0.0
-        self._recognizer = recognizer or SpeechRecognizer(config.get("runtime", {}).get("directory"))
+        self._recognizer = recognizer or SpeechRecognizer(config.get("runtime", {}).get("directory"), config.get("speech_bridge", {}))
         try:
             import webrtcvad
             self._vad = webrtcvad.Vad(2)
@@ -125,6 +135,8 @@ class STTManager(QObject):
         return {"enabled": self.enabled, "listening": self.source is not None,
                 "recognizing": self.busy, "blocked": self.blocked,
                 "speech_active": self._segmenter.active, "level": round(self.level, 3),
+                "permission": self.permission, "received_bytes": self._received_bytes,
+                "capture_format": self.capture_format,
                 "provider": self.config.get("provider", "auto"),
                 "actual_provider": self.actual_provider or SpeechRecognizer.provider(self.config),
                 "language": self.config.get("language", "zh"), "device": self.config.get("device", ""),
@@ -183,29 +195,71 @@ class STTManager(QObject):
             return
         if self.source is None:
             self._start_capture()
+        else:
+            # 部分原生后端的 readyRead 通知不可靠；定时排空同一个 IO，不重复采集。
+            self._read_audio()
+            if not self._received_bytes and time.monotonic() - self._capture_started > 5:
+                self._fail("麦克风已打开但没有收到音频，请检查系统麦克风权限与输入设备")
+            elif time.monotonic() - self._last_meter_update >= 0.25:
+                self._last_meter_update = time.monotonic()
+                self.changed.emit()
+
+    def _microphone_permission_ready(self) -> bool:
+        if sys.platform != "darwin":
+            return True
+        application = QCoreApplication.instance()
+        microphone_permission = QMicrophonePermission()
+        status = application.checkPermission(microphone_permission)
+        self.permission = status.name.lower()
+        if status == Qt.PermissionStatus.Granted:
+            return True
+        if status == Qt.PermissionStatus.Denied:
+            self._fail("麦克风权限未授权，请在系统设置 → 隐私与安全性 → 麦克风中允许心，然后重新开麦")
+        elif not self._permission_pending:
+            # 仅在用户主动开麦后申请；授权回调不能让已关麦/退出的任务重新启动。
+            self._permission_pending = True
+            application.requestPermission(microphone_permission, self._permission_completed)
+            self.changed.emit()
+        return False
+
+    def _permission_completed(self, permission: QMicrophonePermission) -> None:
+        self._permission_pending = False
+        if not self._closed and self.enabled:
+            self._tick()
 
     def _start_capture(self):
+        if not self._microphone_permission_ready():
+            return
         devices = QMediaDevices.audioInputs()
         selected = self.config.get("device", "")
         device = next((d for d in devices if bytes(d.id()).hex() == selected), None) if selected else QMediaDevices.defaultAudioInput()
         if device is None or device.isNull():
-            self._fail("没有可用麦克风，请检查 Windows 权限和麦克风设置")
+            self._fail("没有可用麦克风，请检查 系统录音权限和麦克风设置")
             return
         fmt = QAudioFormat()
         fmt.setSampleRate(16000)
         fmt.setChannelCount(1)
         fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        # macOS 设备虽可能宣称支持 16kHz，实际 CoreAudio 输入使用原生格式更可靠。
+        if sys.platform == "darwin" or not device.isFormatSupported(fmt):
+            fmt = device.preferredFormat()
         if not device.isFormatSupported(fmt):
-            self._fail("所选麦克风不支持 16kHz 单声道录音，请换一个输入设备")
+            self._fail("所选麦克风没有可用录音格式，请换一个输入设备")
             return
+        self._pcm_converter = SpeechPCMConverter(fmt.sampleRate(), fmt.channelCount(), fmt.sampleFormat().name)
+        self.capture_format = f"{fmt.sampleRate()}Hz/{fmt.channelCount()}ch/{fmt.sampleFormat().name}"
         self.source = QAudioSource(device, fmt, self)
-        self.source.setBufferSize(6400)
+        self.source.setBufferSize(fmt.bytesForDuration(200000))
         self.source.stateChanged.connect(self._audio_state)
+        self._received_bytes = 0
+        self._capture_started = time.monotonic()
         self.io = self.source.start()
         if self.io is None or self.source is None or self.source.error() != QAudio.Error.NoError:
-            self._fail("麦克风打开失败，请检查 Windows 麦克风权限或设备占用")
+            self._fail("麦克风打开失败，请检查 系统麦克风权限或设备占用")
             return
         self.io.readyRead.connect(self._read_audio)
+        logger.info("STT capture started: device={}, permission={}, format={}",
+                    device.description(), self.permission, self.capture_format)
         self.changed.emit()
 
     def _audio_state(self, state):
@@ -221,6 +275,7 @@ class STTManager(QObject):
         self._buffer.clear()
         self._segmenter.reset()
         self.level = 0.0
+        self._pcm_converter = None
 
     def _is_speech(self, frame):
         samples = array("h", frame)
@@ -231,7 +286,9 @@ class STTManager(QObject):
     def _read_audio(self):
         if self.io is None or self.blocked or self.busy or not self.enabled:
             return
-        self.feed_pcm(bytes(self.io.readAll()))
+        captured_pcm = bytes(self.io.readAll())
+        self._received_bytes += len(captured_pcm)
+        self.feed_pcm(self._pcm_converter.feed(captured_pcm) if self._pcm_converter else captured_pcm)
 
     def feed_pcm(self, pcm):
         """共用录音帧入口，供原生回归用固定语音验证断句与对话链路。"""
@@ -247,6 +304,8 @@ class STTManager(QObject):
                 break
 
     def _submit(self, pcm):
+        logger.info("STT utterance submitted: provider={}, seconds={:.2f}",
+                    SpeechRecognizer.provider(self.config), len(pcm) / 32000)
         self.busy = True
         self._stop_capture()
         token = self._generation
@@ -282,6 +341,7 @@ class STTManager(QObject):
         self._cooldown = time.monotonic() + 0.7
 
     def _fail(self, error):
+        logger.warning("STT failed: {}", error)
         self._generation += 1
         self.enabled = False
         self.error = error

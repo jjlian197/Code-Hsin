@@ -16,14 +16,14 @@ class MicrophoneDialog(QDialog):
         self.setMinimumWidth(480)
         form = QFormLayout(self)
         self.device = QComboBox()
-        self.device.addItem("跟随 Windows 默认输入", "")
+        self.device.addItem("跟随系统默认输入", "")
         for device in owner.stt.devices():
             self.device.addItem(device["name"], device["id"])
         self.language = QComboBox()
         for name, code in (("中文", "zh"), ("日本語", "ja"), ("自动检测", "auto")):
             self.language.addItem(name, code)
         self.provider = QComboBox()
-        for name, code in (("Qwen ASR（本地）", "qwen"), ("智谱 GLM-ASR（联网）", "zhipu")):
+        for name, code in (("PC · Qwen3-ASR", "remote"), ("自动选择", "auto"), ("Qwen ASR（本地）", "qwen"), ("智谱 GLM-ASR（联网）", "zhipu")):
             self.provider.addItem(name, code)
         config = owner.stt.config
         for widget, key, default in ((self.device, "device", ""), (self.language, "language", "zh"), (self.provider, "provider", "qwen")):

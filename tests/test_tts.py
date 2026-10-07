@@ -72,6 +72,20 @@ class VoiceTest(unittest.TestCase):
             "voice": {"profiles": str(profiles), "enabled": True}}, player)
         return manager, player
 
+    def test_remote_failure_never_uses_cloud_fallback(self):
+        manager, player = self.manager()
+        manager.remote.available = lambda: True
+        manager.configure(provider="remote", fallback=True)
+        try:
+            with patch.object(manager.remote, 'synthesize', side_effect=RuntimeError('PC离线')), patch.object(manager.edge, 'synthesize') as edge:
+                manager.speak("你好", translate=False)
+                self.pump(lambda: manager.error is not None)
+                self.assertIn('PC离线', manager.error)
+                self.assertEqual(player.played, [])
+                edge.assert_not_called()
+        finally:
+            manager.close()
+
     def test_idle_release_preserves_active_request_and_unowned_service(self):
         voice = LocalSynthesizer(self.root / 'profiles.json', self.root)
         self.assertFalse(voice.release_idle(), '不会结束非本实例启动的服务')
@@ -215,7 +229,7 @@ class VoiceTest(unittest.TestCase):
             self.assertEqual(requests[1]["language"], "ja")
             self.assertAlmostEqual(wave_info(ja.read_bytes()), 0.2)
             provider.warmup("ja")
-            self.assertEqual(requests[-1], {"language": "ja"}, "缓存存在仍须实际预热")
+            self.assertEqual(requests[-1], {"language": "ja", "voice_id": "hsin"}, "缓存存在仍须实际预热")
             data = {"profile_id": "wrong"}
             with self.assertRaises(RuntimeError):
                 provider.ensure_server(data)

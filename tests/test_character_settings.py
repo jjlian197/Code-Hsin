@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+import time
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,6 +18,21 @@ from src.ui.settings_dialog import SettingsDialog
 
 
 class CharacterSettingsTest(unittest.TestCase):
+    def test_role_activation_switches_remote_voice_in_worker(self):
+        previous_remote = self.window.tts.remote
+        profile = self.profile()
+        profile["voice"].update(provider="remote", enabled=False, remote_voice="aemeath")
+        self.window.characters.save(profile)
+        self.window.characters.activate(profile["id"])
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and self.window.tts.remote.voice_id != "aemeath":
+            self.app.processEvents()
+            time.sleep(.01)
+        self.assertEqual(self.window.tts.remote.voice_id, "aemeath")
+        self.assertIsNot(self.window.tts.remote, previous_remote)
+        self.assertEqual(self.window.tts.snapshot()["remote_voice"], "aemeath")
+        self.assertFalse(self.window.stt.enabled)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])

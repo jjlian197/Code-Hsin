@@ -32,7 +32,10 @@ class QtWindowTestCase(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.config = load_config()
+        # 测试读取独立配置，避免本机关闭聊天或私有连接设置影响窗口测试。
+        test_config = Path(self.temp.name) / "config.yaml"
+        test_config.write_text((Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf8"), encoding="utf8")
+        self.config = load_config(test_config)
         self.config["_settings_path"] = str(Path(self.temp.name) / "config.local.yaml")
         self.config["sprite"]["renderer"] = "placeholder"
         # 窗口测试只使用占位渲染器；仓库不分发 PMX，测试也不依赖私有模型。

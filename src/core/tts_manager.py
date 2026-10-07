@@ -1,199 +1,17 @@
 """异步合成、语言持久化与按音色隔离的缓存，播放和口型留在 Qt 主线程。"""
-import hashlib
 from collections import deque
-import io
+from copy import deepcopy
 import json
-import os
-from pathlib import Path
-import subprocess
-import sys
 import threading
-import time
-import urllib.error
-import urllib.request
-import wave
 
 from loguru import logger
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtMultimedia import QMediaPlayer
 from src.core.app_config import project_path
-from src.core.preset_voice import PresetVoice
 from src.core.voice_auxiliary import EdgeSynthesizer, VoiceTranslator
 
-
-def wave_info(payload):
-    with wave.open(io.BytesIO(payload), "rb") as audio:
-        duration = audio.getnframes() / audio.getframerate()
-        if audio.getsampwidth() != 2 or audio.getnchannels() != 1 or not 0.1 <= duration <= 300:
-            raise ValueError("语音服务返回了无效的单声道 PCM 音频")
-        return duration
-
-
-def cache_key(text, language, speed, profile):
-    # 内容摘要识别正式权重，文件状态同时防止手动替换权重仍复用旧缓存。
-    resources = {key: (str(Path(profile[key]).resolve()), Path(profile[key]).stat().st_size,
-                       Path(profile[key]).stat().st_mtime_ns)
-                 for key in ("gpt_weights", "sovits_weights", "reference_audio")}
-    identity = {"text": text, "language": language, "speed": speed,
-                "profile": profile, "resources": resources, "engine": "hsin-v2ProPlus-1"}
-    return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-
-
-class LocalSynthesizer:
-    def __init__(self, profiles, runtime, port=19880):
-        self.profiles_path = Path(profiles)
-        self.runtime = Path(runtime) / "tts"
-        self.port = port
-        self.base = f"http://127.0.0.1:{port}"
-        self.process = None
-        self.process_lock = threading.Lock()
-        self.operation_lock = threading.Lock()
-        self.idle_released = False
-        self.closed = threading.Event()
-        self.presets = PresetVoice()
-
-    def health(self):
-        with urllib.request.urlopen(self.base + "/health", timeout=2) as response:
-            return json.load(response)
-
-    def ensure_server(self, data):
-        try:
-            health = self.health()
-        except (OSError, ValueError):
-            health = None
-        if health:
-            if health.get("service") != "hsin-gptsovits" or health.get("profile_id") != data["profile_id"]:
-                raise RuntimeError("心的语音端口已被其他配置占用，请更换 voice.port")
-            self.idle_released = False
-            return
-        with self.process_lock:
-            if self.closed.is_set():
-                raise RuntimeError("语音服务正在退出")
-            if self.process is None or self.process.poll() is not None:
-                self.runtime.mkdir(parents=True, exist_ok=True)
-                temp = self.runtime / "temp"
-                temp.mkdir(exist_ok=True)
-                env = os.environ.copy()
-                env.update(TEMP=str(temp), TMP=str(temp), PYTHONIOENCODING="utf-8",
-                           PYTHONPYCACHEPREFIX=str(temp / "pycache"), HF_HOME=str(temp / "hf"),
-                           TORCH_HOME=str(temp / "torch"), HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
-                env.update(OMP_NUM_THREADS="2", MKL_NUM_THREADS="2")
-                env["PATH"] = data["installation"]["gptsovits_root"] + os.pathsep + env.get("PATH", "")
-                frozen_windows = os.name == "nt" and getattr(sys, "frozen", False)
-                if frozen_windows:
-                    # 外部 GPT 环境不能继承冻结程序的 DLL 搜索目录或 Qt PATH。
-                    import ctypes
-                    bundle_root = Path(sys._MEIPASS).resolve()
-                    env["PATH"] = os.pathsep.join(item for item in env["PATH"].split(os.pathsep)
-                        if item and not Path(item).resolve().is_relative_to(bundle_root))
-                with (self.runtime / "server.log").open("ab") as log:
-                    if frozen_windows:
-                        ctypes.windll.kernel32.SetDllDirectoryW(None)
-                    try:
-                        self.process = subprocess.Popen([data["installation"]["python"], "-u", "-s",
-                            str(project_path("tools/hsin_voice_server.py")), "--profiles", str(self.profiles_path),
-                            "--runtime", str(self.runtime), "--port", str(self.port)],
-                            cwd=data["installation"]["gptsovits_root"], env=env, stdout=log, stderr=log,
-                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                    finally:
-                        if frozen_windows:
-                            ctypes.windll.kernel32.SetDllDirectoryW(str(bundle_root))
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline and not self.closed.wait(0.15):
-            try:
-                health = self.health()
-                if health.get("service") == "hsin-gptsovits" and health.get("profile_id") == data["profile_id"]:
-                    self.idle_released = False
-                    return
-                raise RuntimeError("语音服务身份不匹配")
-            except urllib.error.URLError:
-                if self.process.poll() is not None:
-                    raise RuntimeError("语音服务启动失败，请查看 .runtime/tts/server.log")
-        raise RuntimeError("语音服务启动超时或已退出")
-
-    def synthesize(self, text, language, speed):
-        with self.operation_lock:
-            return self._synthesize(text, language, speed)
-
-    def _synthesize(self, text, language, speed):
-        preset = self.presets.find(text, language, speed)
-        if preset:
-            wave_info(preset.read_bytes())
-            return preset
-        if not self.profiles_path.is_file():
-            raise RuntimeError("这段文字不在预存语音中；请导入 GPT-SoVITS 音色配置，或选择 Edge 联网语音")
-        data = json.loads(self.profiles_path.read_text(encoding="utf8"))
-        profile = data["profiles"][language]
-        key = cache_key(text, language, speed, profile)
-        cache = self.runtime / "cache" / language
-        cache.mkdir(parents=True, exist_ok=True)
-        path = cache / (key + ".wav")
-        if path.is_file():
-            try:
-                wave_info(path.read_bytes())
-                return path
-            except (OSError, ValueError, wave.Error, EOFError):
-                path.unlink(missing_ok=True)
-        self.ensure_server(data)
-        request = urllib.request.Request(self.base + "/tts", data=json.dumps(
-            {"text": text, "language": language, "speed": speed}, ensure_ascii=False).encode(),
-            headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                payload = response.read(24 * 1024 * 1024 + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(8192).decode("utf8", errors="replace")
-            raise RuntimeError("语音合成失败：" + detail) from exc
-        if len(payload) > 24 * 1024 * 1024:
-            raise ValueError("语音结果超过大小限制")
-        wave_info(payload)
-        temp = path.with_suffix(".part")
-        temp.write_bytes(payload)
-        temp.replace(path)
-        return path
-
-    def warmup(self, language):
-        with self.operation_lock:
-            self._warmup(language)
-
-    def _warmup(self, language):
-        data = json.loads(self.profiles_path.read_text(encoding="utf8"))
-        self.ensure_server(data)
-        # 独立端点强制做一次推理，不能由磁盘音频缓存代替模型预热。
-        request = urllib.request.Request(self.base + "/warmup", data=json.dumps({"language": language}).encode(),
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.load(response)
-        if result.get("language") != language or result.get("ready") is not True:
-            raise RuntimeError("语音预热未完成")
-
-    def close(self):
-        self.closed.set()
-        self._stop_owned_process()
-
-    def _stop_owned_process(self):
-        with self.process_lock:
-            process, self.process = self.process, None
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-            return process is not None
-
-    def release_idle(self):
-        # 只释放自己启动的服务；已连接的用户服务不受影响。
-        if not self.operation_lock.acquire(blocking=False):
-            return False
-        try:
-            released = self._stop_owned_process()
-            if released:
-                self.idle_released = True
-            return released
-        finally:
-            self.operation_lock.release()
+# 保留旧导入路径，桌面与无 Qt 的 PC 服务共用同一套音频校验/合成逻辑。
+from src.core.local_synthesizer import LocalSynthesizer, cache_key, wave_info
 
 
 class TTSManager(QObject):
@@ -224,7 +42,7 @@ class TTSManager(QObject):
                 self.language = state["language"]
             if type(state.get("enabled")) is bool:
                 self.enabled = state["enabled"]
-            if state.get("provider") in ("gptsovits", "edge", "qwen"):
+            if state.get("provider") in ("gptsovits", "edge", "qwen", "remote"):
                 self.engine = state["provider"]
             for name in ("auto_translate", "fallback"):
                 if type(state.get(name)) is bool:
@@ -235,6 +53,10 @@ class TTSManager(QObject):
         from src.core.qwen_voice import QwenSynthesizer
         from src.core.app_config import DEFAULT_CONFIG
         self.qwen = QwenSynthesizer(voice.get("qwen", DEFAULT_CONFIG["voice"]["qwen"]), self.profiles_path, self.state_path.parent)
+        from src.core.remote_voice import RemoteSynthesizer
+        self._remote_settings = deepcopy(config.get("speech_bridge", {}))
+        self.remote_voice = voice.get("remote_voice", "hsin")
+        self.remote = RemoteSynthesizer(self._remote_settings, self.state_path.parent, self.remote_voice)
         self.edge = EdgeSynthesizer(self.state_path.parent)
         self.translator = VoiceTranslator(config, self.state_path.parent)
         self.generation = 0
@@ -260,7 +82,7 @@ class TTSManager(QObject):
         self._stream_language = None
         self._warmup_language = self._warmup_target = None
         self._prewarm_enabled = False
-        self._resource_identity = (str(self.profiles_path), json.dumps(voice.get("qwen", {}), sort_keys=True), voice.get("port", 19880), True)
+        self._resource_identity = (str(self.profiles_path), json.dumps(voice.get("qwen", {}), sort_keys=True), voice.get("port", 19880), True, self.remote_voice)
         self._resources_pending = None
         self.warmup_state, self.warmup_error = "idle", None
         self.completed.connect(self._complete, Qt.ConnectionType.QueuedConnection)
@@ -273,11 +95,12 @@ class TTSManager(QObject):
         self._worker.start()
 
     def snapshot(self):
-        available = {"gptsovits": self.profiles_path.is_file() or self.provider.presets.available(), "edge": self.edge.available(), "qwen": self.qwen.available()}
-        configured = available[self.engine] or (self.fallback and any(available.values()))
+        available = {"gptsovits": self.profiles_path.is_file() or self.provider.presets.available(), "edge": self.edge.available(), "qwen": self.qwen.available(), "remote": self.remote.available()}
+        configured = available[self.engine] or (self.fallback and self.engine in ("gptsovits", "edge")
+                                               and (available["gptsovits"] or available["edge"]))
         return {"enabled": self.enabled, "configured": configured,
                 "language": self.language, "languages": ["zh", "ja"], "provider": self.engine,
-                "providers": available, "actual_provider": self.actual_provider,
+                "providers": available, "actual_provider": self.actual_provider, "remote_voice": self.remote_voice,
                 "preset_voice": self.provider.presets.available(), "trained_voice": self.profiles_path.is_file(),
                 "auto_translate": self.auto_translate, "fallback": self.fallback,
                 "stage": self.stage, "warning": self.warning,
@@ -292,7 +115,7 @@ class TTSManager(QObject):
         self._prewarm_enabled = True
         if self.engine == "gptsovits" and not self.profiles_path.is_file():
             return  # 仅预存台词时无需启动不存在的推理环境。
-        if self._closed or self.engine not in ("gptsovits", "qwen") or not self.snapshot()["configured"]:
+        if self._closed or self.engine not in ("gptsovits", "qwen", "remote") or not self.snapshot()["configured"]:
             return
         if self._warmup_target == self.language and self.warmup_state in {"warming", "ready"}:
             return
@@ -314,8 +137,8 @@ class TTSManager(QObject):
             raise ValueError("语言需要 zh 或 ja")
         if enabled is not None and type(enabled) is not bool:
             raise ValueError("enabled 需要布尔值")
-        if provider is not None and provider not in ("gptsovits", "edge", "qwen"):
-            raise ValueError("provider 需要 gptsovits、edge 或 qwen")
+        if provider is not None and provider not in ("gptsovits", "edge", "qwen", "remote"):
+            raise ValueError("provider 需要 gptsovits、edge、qwen 或 remote")
         for name, value in (("auto_translate", auto_translate), ("fallback", fallback)):
             if value is not None and type(value) is not bool:
                 raise ValueError(name + " 需要布尔值")
@@ -350,16 +173,18 @@ class TTSManager(QObject):
 
     def configure_resources(self, voice, *, presets=True):
         """音色更换与合成在同一工作线程串行；旧任务仍由generation失效。"""
-        identity = (str(project_path(voice["profiles"])), json.dumps(voice["qwen"], sort_keys=True), voice["port"], presets)
+        voice_id = voice.get("remote_voice", "hsin")
+        identity = (str(project_path(voice["profiles"])), json.dumps(voice["qwen"], sort_keys=True), voice["port"], presets, voice_id)
         if identity == self._resource_identity:
             return
         self.stop()
         self.profiles_path = project_path(voice["profiles"])
         self._resource_identity = identity
+        self.remote_voice = voice_id
         self._warmup_target = None
         self.warmup_state = "idle"
         with self._condition:
-            self._resources_pending = (self.profiles_path, dict(voice["qwen"]), voice["port"], presets)
+            self._resources_pending = (self.profiles_path, dict(voice["qwen"]), voice["port"], presets, voice_id)
             self._condition.notify()
 
     def speak(self, text, language=None, speed=1.0, volume=None, translate=None):
@@ -446,7 +271,7 @@ class TTSManager(QObject):
                     self._prefetched += 1
                 self.model_work_active.set()
             if resources is not None:
-                profiles, settings, port, presets = resources
+                profiles, settings, port, presets, voice_id = resources
                 self.provider.close()
                 self.qwen.close()
                 self.provider = LocalSynthesizer(profiles, self.state_path.parent, port)
@@ -454,14 +279,18 @@ class TTSManager(QObject):
                     self.provider.presets.entries = {}
                 from src.core.qwen_voice import QwenSynthesizer
                 self.qwen = QwenSynthesizer(settings, profiles, self.state_path.parent)
+                self.remote.close()
+                from src.core.remote_voice import RemoteSynthesizer
+                self.remote = RemoteSynthesizer(self._remote_settings, self.state_path.parent, voice_id)
                 if self._closed:
                     self.provider.close()
                     self.qwen.close()
+                    self.remote.close()
                 self.model_work_active.clear()
                 continue
             if job is None:
                 try:
-                    {"gptsovits": self.provider, "qwen": self.qwen}[warmup_engine].warmup(warmup_language)
+                    {"gptsovits": self.provider, "qwen": self.qwen, "remote": self.remote}[warmup_engine].warmup(warmup_language)
                     error = None
                 except Exception as exc:
                     error = str(exc)
@@ -478,7 +307,7 @@ class TTSManager(QObject):
                     spoken = self.translator.translate(text, language)
                 if self._closed or generation != self.generation:
                     continue
-                providers = {"gptsovits": self.provider, "edge": self.edge, "qwen": self.qwen}
+                providers = {"gptsovits": self.provider, "edge": self.edge, "qwen": self.qwen, "remote": self.remote}
                 warning = None
                 self.stage_changed.emit(generation, "synthesizing")
                 try:
@@ -486,7 +315,7 @@ class TTSManager(QObject):
                 except Exception as primary_error:
                     if self._closed or generation != self.generation:
                         continue
-                    if not fallback or engine == "qwen":
+                    if not fallback or engine in ("qwen", "remote"):
                         raise
                     alternate = "edge" if engine == "gptsovits" else "gptsovits"
                     self.stage_changed.emit(generation, "fallback")
@@ -516,7 +345,7 @@ class TTSManager(QObject):
             self.stop()
             self.failed.emit(self.error)
         elif result:
-            if (result[3] in ("gptsovits", "qwen") and result[5]["language"] == self._warmup_target
+            if (result[3] in ("gptsovits", "qwen", "remote") and result[5]["language"] == self._warmup_target
                     and (result[3] != "gptsovits" or not self.provider.idle_released)):
                 self.warmup_state, self.warmup_error = "ready", None
             self._ready.append(result)
@@ -588,6 +417,7 @@ class TTSManager(QObject):
 
     def stop(self):
         self.generation += 1
+        self.remote.cancel()
         if self.qwen.worker.active.is_set():
             self.qwen.cancel()
             self.warmup_state = "idle"
@@ -617,3 +447,4 @@ class TTSManager(QObject):
         self.provider.close()
         self.qwen.close()
         self.edge.close()
+        self.remote.close()

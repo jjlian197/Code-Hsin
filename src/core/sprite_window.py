@@ -1,13 +1,15 @@
 """Hsin 桌面窗口；置顶、透明、托盘和拖动行为适配自 aemeath-spirit。"""
 import json
+import sys
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QPoint, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QPixmap, QShowEvent
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFrame, QInputDialog, QMainWindow, QMenu, QMessageBox, QStackedLayout, QSystemTrayIcon, QWidget
 
 from src.core.app_config import project_path
+from src.core.platform_support import configure_desktop_window
 from src.core.sprite_view import SpriteView
 from src.core.pmx_view import PmxView
 from src.core.voice_player import LocalVoicePlayer
@@ -183,10 +185,16 @@ class HsinSpriteWindow(QMainWindow):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        if sys.platform == "darwin":
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setWindowTitle("心 · Hsin 桌面精灵")
         self.setWindowIcon(create_icon())
         window = self.config["sprite"]["window"]
         self.setFixedSize(window["width"], window["height"])
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        configure_desktop_window(self, always_on_top=self._always_on_top)
 
     def _setup_ui(self):
         self.central_widget = QFrame()
@@ -339,7 +347,7 @@ class HsinSpriteWindow(QMainWindow):
         engine_group = QActionGroup(engines)
         engine_group.setExclusive(True)
         self._voice_engine_actions = {}
-        for engine, label in (("gptsovits", "心 · GPT-SoVITS"), ("qwen", "心 · Qwen（本机）"), ("edge", "Edge · 通用女声（联网）")):
+        for engine, label in (("remote", "心 · PC 语音桥接"), ("gptsovits", "心 · GPT-SoVITS"), ("qwen", "心 · Qwen（本机）"), ("edge", "Edge · 通用女声（联网）")):
             action = engines.addAction(label)
             action.setCheckable(True)
             engine_group.addAction(action)
@@ -804,7 +812,9 @@ class HsinSpriteWindow(QMainWindow):
         self._voice_fallback_action.setChecked(self.tts.fallback)
         state = self.tts.snapshot()
         phases = {"queued": "准备语音…", "translating": "文本翻译中…", "synthesizing": "语音合成中…", "fallback": "备用音色合成中…"}
-        ready = "心的音色已就绪" if self.tts.engine in ("gptsovits", "qwen") else "Edge 通用音色已就绪"
+        ready = "心的音色已就绪" if self.tts.engine in ("gptsovits", "qwen", "remote") else "Edge 通用音色已就绪"
+        if self.tts.engine == "remote":
+            ready = "PC 语音桥接已配置"
         if self.tts.engine == "gptsovits" and state["preset_voice"] and not state["trained_voice"]:
             ready = "中日预存语音可用 · 新句需音色配置或 Edge"
         warmup = state["warmup"]

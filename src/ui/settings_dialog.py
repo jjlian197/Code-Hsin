@@ -184,11 +184,19 @@ class SettingsDialog(QDialog):
         form = self.page("语音")
         self.field(form, "voice.enabled", "开启语音", check=True)
         self.field(form, "voice.language", "回复语言", choices=(("中文", "zh"), ("日本語", "ja")))
-        self.field(form, "voice.provider", "音色", choices=(("心 · 本地 GPT-SoVITS", "gptsovits"), ("心 · Qwen（本机实验）", "qwen"), ("通用女声 · Edge（联网）", "edge")))
+        self.field(form, "voice.provider", "音色", choices=(("心 · PC 语音桥接", "remote"), ("心 · 本地 GPT-SoVITS", "gptsovits"), ("心 · Qwen（本机实验）", "qwen"), ("通用女声 · Edge（联网）", "edge")))
         self.field(form, "voice.volume", "音量", decimal=(0, 1))
+        self.field(form, "voice.remote_voice", "PC 音色", choices=(("心", "hsin"), ("爱弥斯", "aemeath")))
         self.field(form, "voice.auto_translate", "自动翻译直接朗读的文本", check=True)
         self.field(form, "voice.fallback", "合成失败尝试备用音色（可能联网）", check=True)
         form.addRow(self.note("Qwen使用已准备的独立环境：中文微调音色、日文Base参考原声。Qwen失败不会转用云端音色。GPT-SoVITS继续保留；Edge会发送待朗读文字。聊天按回复语言生成，不重复翻译。"))
+        for key, label in (("url", "PC 语音地址（HTTPS／隧道）"), ("ssh_host", "PC SSH 主机"),
+                           ("ssh_user", "PC SSH 用户"), ("ssh_key", "本机 SSH 私钥路径")):
+            self.field(form, "speech_bridge." + key, label)
+        self.field(form, "speech_bridge.token", "桥接访问令牌", secret=True)
+        self.field(form, "speech_bridge.remote_port", "PC 语音服务端口", integer=(1, 65535))
+        self.field(form, "speech_bridge.ssh_port", "PC SSH 端口", integer=(1, 65535))
+        form.addRow(self.note("STT 与 TTS 共用此桥接连接。直连填写 https://域名 和访问令牌，忽略 SSH 配置；隧道填写 http://127.0.0.1:本机端口，SSH 主机留空表示手动隧道。修改连接后需重启。PC 模式失败会显示错误，不自动转用云端。"))
         self.voice_status = self.note("")
         form.addRow(self.voice_status)
 
@@ -197,7 +205,7 @@ class SettingsDialog(QDialog):
         devices = [("系统默认输入", "")] + [(d["name"], d["id"]) for d in self.owner.stt.devices()]
         self.field(form, "stt.device", "输入设备", choices=devices)
         self.field(form, "stt.language", "识别语言", choices=(("中文", "zh"), ("日本語", "ja"), ("自动检测", "auto")))
-        self.field(form, "stt.provider", "识别方式", choices=(("自动选择", "auto"), ("Qwen ASR（本机）", "qwen"), ("智谱（联网）", "zhipu")))
+        self.field(form, "stt.provider", "识别方式", choices=(("PC · Qwen3-ASR", "remote"), ("自动选择", "auto"), ("Qwen ASR（本机）", "qwen"), ("智谱（联网）", "zhipu")))
         self.field(form, "stt.zhipu.api_key", "智谱 Key", secret=True).setPlaceholderText("本地识别可留空；支持环境变量")
         words = QPlainTextEdit("\n".join(self.value("stt.hotwords", [])))
         words.setMaximumHeight(100)
@@ -206,6 +214,18 @@ class SettingsDialog(QDialog):
         form.addRow(self.note("保存不会自动开麦，请在右键菜单或聊天窗口主动开启。智谱会上传当前短句；自动模式有 Key 时中文优先云端，日语使用本地。"))
         self.microphone_status = self.note("")
         form.addRow(self.microphone_status)
+        self.microphone_input_status = self.note("")
+        form.addRow("实时收音", self.microphone_input_status)
+        self.owner.stt.changed.connect(self.refresh_microphone_input)
+        self.refresh_microphone_input()
+
+    def refresh_microphone_input(self) -> None:
+        microphone = self.owner.stt.snapshot()
+        status = ("正在识别" if microphone["recognizing"] else "回复期间暂停收音" if microphone["blocked"]
+                  else "等待系统授权" if microphone.get("permission") == "undetermined"
+                  else "正在收音" if microphone["listening"] else "已关闭")
+        self.microphone_input_status.setText(microphone["error"] or
+            f"{status} · 音量 {microphone['level']:.0%} · 已接收 {microphone.get('received_bytes', 0)} 字节")
 
     def resources_page(self):
         form = self.page("资源")
@@ -287,7 +307,6 @@ class SettingsDialog(QDialog):
         else:
             for key in ("voice.enabled", "voice.auto_translate", "voice.fallback"):
                 self.fields[key].setChecked(False)
-            self.fields["stt.provider"].setCurrentIndex(self.fields["stt.provider"].findData("qwen"))
         self.tabs.setCurrentIndex(1)
 
     def advance(self):
@@ -314,13 +333,13 @@ class SettingsDialog(QDialog):
         voice = data["voice"]
         qwen_voice_ready = all(project_path(voice["qwen"][name]).exists() for name in ("python", "zh_model", "ja_model"))
         self.voice_status.setText("自动翻译：" + ("使用本机Qwen" if chat["provider"] == "ollama" else "凭据已配置" if key else "需要 DeepSeek Key，可关闭") +
-            "\n本地音色：" + (("Qwen资源已找到，实际合成需运行验证" if qwen_voice_ready else "Qwen运行环境或模型缺失") if voice["provider"] == "qwen" else self.voice_readiness(voice["profiles"])) +
+            "\n本地音色：" + (("Qwen资源已找到，实际合成需运行验证" if qwen_voice_ready else "Qwen运行环境或模型缺失") if voice["provider"] == "qwen" else ("PC 桥接已配置，实际连接需验证" if data.get("speech_bridge", {}).get("url") else "请配置 PC 桥接连接") if voice["provider"] == "remote" else self.voice_readiness(voice["profiles"])) +
             ("\n已内置中日固定语音；新句仍需推理环境或 Edge。" if self.owner.tts.provider.presets.available() else ""))
         stt = data["stt"]
         provider = SpeechRecognizer.provider(stt)
         qwen_ready = project_path(stt["qwen"]["python"]).is_file() and (project_path(stt["qwen"]["model"]) / "config.json").is_file()
-        self.microphone_status.setText("当前识别选择：" + {"zhipu": "智谱（上传短句）", "qwen": "本机Qwen ASR"}[provider] +
-            "\n本地组件：" + (("Qwen环境与模型已找到" if qwen_ready else "Qwen环境或模型缺失") if provider == "qwen" else "智谱需配置Key"))
+        self.microphone_status.setText("当前识别选择：" + {"zhipu": "智谱（上传短句）", "qwen": "本机Qwen ASR", "remote": "PC Qwen3-ASR"}[provider] +
+            "\n本地组件：" + (("Qwen环境与模型已找到" if qwen_ready else "Qwen环境或模型缺失") if provider == "qwen" else "PC 桥接连接使用语音页设置" if provider == "remote" else "智谱需配置Key"))
         resources = [("一阶段模型", data["sprite"].get("model", {}).get("forms", {}).get("first", "")),
                      ("二阶段模型", data["sprite"].get("model", {}).get("forms", {}).get("second", ""))]
         self.resource_status.setText("\n".join(label + "：" + ("文件存在（重启后加载验证）" if path and project_path(path).is_file() else "未找到，可选择本地文件") for label, path in resources))

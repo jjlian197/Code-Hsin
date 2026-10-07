@@ -5,6 +5,8 @@ import base64
 import json
 import threading
 import wave
+from pathlib import Path
+from typing import Any
 from src.core.stt_hotwords import hotwords
 
 
@@ -19,12 +21,15 @@ def wav_bytes(pcm):
 
 
 class SpeechRecognizer:
-    def __init__(self, runtime=None):
+    def __init__(self, runtime: str | Path | None = None, remote_settings: dict[str, Any] | None = None) -> None:
         self._lock = threading.Lock()
         self._closed = False
         self._qwen = None
         self._qwen_identity = None
         self._runtime = runtime
+        from src.core.app_config import project_path
+        from src.core.remote_voice import RemoteVoiceClient
+        self._remote = RemoteVoiceClient(remote_settings or {}, project_path(runtime or ".runtime"))
 
     @staticmethod
     def key(config):
@@ -37,7 +42,7 @@ class SpeechRecognizer:
             return requested
         return "zhipu" if cls.key(config) and config.get("language") != "ja" else "qwen"
 
-    def transcribe(self, pcm, config):
+    def transcribe(self, pcm: bytes, config: dict[str, Any]) -> tuple[str, str, str]:
         if self._closed:
             raise RuntimeError("语音识别已关闭")
         if not pcm or len(pcm) > 16000 * 2 * 25 or len(pcm) % 2:
@@ -45,6 +50,15 @@ class SpeechRecognizer:
         audio = wav_bytes(pcm)
         provider = self.provider(config)
         warning = ""
+        if provider == "remote":
+            generation = self._remote.generation
+            self._remote.health(generation)
+            response = json.loads(self._remote.request("/v1/stt", {
+                "audio_base64": base64.b64encode(audio).decode("ascii"),
+                "language": config.get("language", "zh"), "hotwords": hotwords(config)}, expected_generation=generation))
+            if not isinstance(response.get("text"), str):
+                raise RuntimeError("PC 识别响应格式无效")
+            return response["text"], "remote-qwen", ""
         if provider == "qwen":
             from src.core.model_process import ModelProcess
             from src.core.app_config import project_path
@@ -64,7 +78,7 @@ class SpeechRecognizer:
             return result["text"], "qwen", ""
         if provider == "zhipu":
             return self._cloud(audio, config), "zhipu", ""
-        raise ValueError("识别引擎需要 qwen 或 zhipu")
+        raise ValueError("识别引擎需要 qwen、zhipu 或 remote")
 
     def _cloud(self, audio, config):
         key = self.key(config)
@@ -97,10 +111,12 @@ class SpeechRecognizer:
     def close(self):
         with self._lock:
             self._closed = True
+        self._remote.close()
         if self._qwen:
             self._qwen.close()
 
     def cancel(self):
+        self._remote.cancel()
         if self._qwen and self._qwen.active.is_set():
             self._qwen.cancel()
 

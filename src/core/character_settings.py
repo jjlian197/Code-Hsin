@@ -8,7 +8,7 @@ from src.core.character_package import load_character_package
 
 CHAT_KEYS = ("enabled", "provider", "reply_length", "speech_scope", "speech_sentence_count", "speech_prefix_chars")
 BACKEND_KEYS = {"hermes": ("profile",), "openclaw": ("agent",), "deepseek": ("model",), "ollama": ("model", "thinking", "context_length")}
-VOICE_KEYS = ("enabled", "provider", "language", "volume", "auto_translate", "fallback", "profiles", "qwen")
+VOICE_KEYS = ("enabled", "provider", "remote_voice", "language", "volume", "auto_translate", "fallback", "profiles", "qwen")
 
 
 def profile_from_config(config, name="心", package="", persona=None):
@@ -54,6 +54,8 @@ class CharacterSettings:
             if data.get("version") != 1 or not isinstance(data.get("profiles"), list):
                 raise ValueError("无效角色列表")
             for profile in data["profiles"]:
+                if isinstance(profile, dict) and isinstance(profile.get("voice"), dict):
+                    profile["voice"].setdefault("remote_voice", "hsin")
                 profile_config(owner.config, profile)
                 if any(item["id"] == profile["id"] for item in self.profiles):
                     raise ValueError("角色ID重复")
@@ -69,8 +71,8 @@ class CharacterSettings:
             aemeath = project_path(".runtime/characters/aemeath/character.json")
             if aemeath.is_file():
                 profile = profile_from_config(owner.config, "爱弥斯", str(aemeath),
-                    "你是《鸣潮》的爱弥斯，在用户的桌面上陪伴他。回答自然、适合朗读，不编造未知经历或工具操作。")
-                profile["voice"].update(enabled=False, fallback=False)
+                    project_path("src/assets/character_profiles/aemeath.persona.txt").read_text(encoding="utf8"))
+                profile["voice"].update(enabled=False, fallback=False, remote_voice="aemeath")
                 profile["chat"].update(enabled=False, provider="ollama")
                 self.profiles.append(profile)
 

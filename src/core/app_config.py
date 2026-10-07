@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", F
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
 
 
-def user_data_root():
+def user_data_root() -> Path | None:
     """便携数据随目录移动；安装版数据独立于可替换的程序目录。"""
     override = os.environ.get("HSIN_DATA_DIR")
     if override:
@@ -20,7 +20,11 @@ def user_data_root():
         return None
     if (PROJECT_ROOT / "portable.txt").is_file():
         return PROJECT_ROOT / "data"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/Hsin"
     return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "Hsin"
+DEFAULT_REMOTE = {"url": "", "ssh_host": "", "ssh_user": "lianj", "ssh_key": "~/.ssh/id_ed25519",
+                  "ssh_port": 22, "remote_port": 19881, "timeout": 180, "token": ""}
 DEFAULT_CONFIG = {
     "sprite": {"name": "Hsin", "window": {"width": 400, "height": 600, "opacity": 1.0,
                "always_on_top": True, "click_through": False}, "renderer": "pmx",
@@ -29,6 +33,7 @@ DEFAULT_CONFIG = {
                              "transitions": {"first": "src/assets/motions/first.json", "second": "src/assets/motions/second.json"}}},
     "websocket": {"enabled": True, "host": "127.0.0.1", "port": 18765},
     "http": {"enabled": True, "host": "127.0.0.1", "port": 18766},
+    "speech_bridge": deepcopy(DEFAULT_REMOTE),
     "logging": {"level": "INFO", "file": ".runtime/hsin.log"},
     "runtime": {"directory": ".runtime", "model_idle_seconds": 600},
     "stt": {"provider": "qwen", "language": "zh", "device": "",
@@ -37,7 +42,7 @@ DEFAULT_CONFIG = {
             "qwen": {"python": ".runtime/local-model-tests/venv-asr/Scripts/python.exe", "model": ".runtime/local-model-tests/models/qwen3-asr", "gpu": "4080"}},
     "voice": {"manifest": "voice/hsin_zh/selection.json", "profiles": "voice/profiles.json",
               "enabled": False, "language": "zh", "volume": 0.65, "port": 19880,
-              "provider": "gptsovits", "auto_translate": True, "fallback": True,
+              "provider": "gptsovits", "remote_voice": "hsin", "auto_translate": True, "fallback": True,
               "qwen": {"python": ".runtime/local-model-tests/venv-tts/Scripts/python.exe", "gpu": "4080",
                        "zh_model": ".runtime/qwen3-tts-training/zh/checkpoint-epoch-3", "ja_model": ".runtime/local-model-tests/models/qwen3-tts"}},
     "chat": {"provider": "hermes", "reply_length": "normal", "speech_scope": "full", "speech_sentence_count": 3, "speech_prefix_chars": 500,
@@ -79,7 +84,7 @@ def read_yaml(path):
 
 
 def load_config(path=None):
-    path = Path(path).resolve() if path else PROJECT_ROOT / "config.yaml"
+    path = Path(path).resolve() if path else project_path("config.yaml")
     config = merge_config(DEFAULT_CONFIG, read_yaml(path))
     data = user_data_root()
     local = data / "config.local.yaml" if data else path.with_name("config.local.yaml")
@@ -132,6 +137,8 @@ def validate_config(config):
     for key in ("always_on_top", "click_through"):
         if type(window[key]) is not bool:
             raise ValueError(f"窗口 {key} 必须是布尔值")
+    from src.core.remote_voice import validate_remote
+    validate_remote(config.get("speech_bridge", {}))
     ports = []
     for name in ("websocket", "http"):
         service = config[name]
@@ -174,8 +181,10 @@ def validate_config(config):
         raise ValueError("voice 需要配置对象")
     if voice.get("language", "zh") not in ("zh", "ja") or type(voice.get("enabled", False)) is not bool:
         raise ValueError("voice.language 需要 zh/ja，voice.enabled 需要布尔值")
-    if voice.get("provider", "gptsovits") not in ("gptsovits", "edge", "qwen"):
-        raise ValueError("voice.provider 需要 gptsovits、edge 或 qwen")
+    if voice.get("provider", "gptsovits") not in ("gptsovits", "edge", "qwen", "remote"):
+        raise ValueError("voice.provider 需要 gptsovits、edge、qwen 或 remote")
+    if voice.get("remote_voice", "hsin") not in ("hsin", "aemeath"):
+        raise ValueError("PC 音色需要 hsin 或 aemeath")
     if voice.get("provider") == "qwen":
         validate_qwen(voice.get("qwen"), ("python", "zh_model", "ja_model", "gpu"))
     if any(type(voice.get(name, True)) is not bool for name in ("auto_translate", "fallback")):

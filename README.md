@@ -10,6 +10,8 @@
 
 后续顺序与验收目标见 [后续计划](docs/ROADMAP.md)。
 
+**macOS 开发版**：已在 Mac mini M4 上跑通源码与 arm64 `.app` 的基础桌面功能。双击 `启动心.command` 运行源码，或按 [macOS 使用与实测记录](docs/MACOS.md) 构建应用包；模型需自行导入。已接入 HTTPS PC 语音桥接，保留智谱 STT；真人录音已获用户确认。Mac 本地推理仍待验证，当前状态见 [开发进度](docs/MACOS_STATUS.md)。
+
 已加入首次启动引导与 **右键/托盘 → 设置…**，统一修改连接、语音、麦克风、模型资源、外观和高级参数。已有配置保留，可先使用无需 Key 的基础陪伴；设置不自动开麦。使用方式见 [设置说明](docs/SETTINGS.md)。
 
 右键或托盘“动作 → 躺下休息”现在可从站立过渡到撑头侧躺，选择“待机”播放独立起身；两形态共用固定地面与稳定取景，途中选择手势会等起身后执行。启动颈部扭曲与起身后双臂平举已修复；侧躺衣发加入重力、阻尼和身体/地面约束，支持原物理开关与重置，贴身褶皱与布料自碰撞仍需细化。原模型不分发；默认FBX与双形态校准动作随包提供，新环境重建方法见 [站立与侧躺过渡](docs/SIDE_LYING_TRANSITION_PLAN.md)。
@@ -114,3 +116,5 @@ python -m src.main --run-for 25 --snapshot .runtime/pmx-first-preview.png
 本次经验整理为 [desktop-spirit-engineering Skill](skills/desktop-spirit-engineering/SKILL.md)，覆盖角色动作、衣发物理、分句语音、气泡时序、STT、设置与 Windows 发行，可用于继续优化 Aemeath spirit。Release 同时提供独立 Skill ZIP 与 GPT-SoVITS 配置 ZIP。
 
 源码采用 GPL-3.0，第三方组件与角色素材按各自许可使用，见 [LICENSE](LICENSE) 与 [第三方说明](docs/DEPENDENCY_LICENSES.md)。
+
+macOS 的 PC 语音推理与智谱 STT 选项见 [PC 语音桥接指南](docs/MACOS_PC_VOICE.md)。

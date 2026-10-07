@@ -1,5 +1,7 @@
 # 心 · Hsin macOS 开发交接
 
+> 2026-10-07 接手进展：基础源码与 arm64 应用包已完成首轮实测，当前使用与限制见 [macOS 使用与开发](MACOS.md)。下文保留 Windows 交接时的状态；根目录 AGENTS.md 已更新为当前 PMX 架构。
+
 更新：2026-10-06。接收环境：用户的 Mac mini。本文根据当前 Windows 工作区的代码和文档整理；macOS 尚未运行或验收。Mac mini 的芯片、内存、macOS 版本及已有 Python 环境需在接手时记录。
 
 ## 1. 接手时首先确认

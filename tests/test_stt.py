@@ -5,6 +5,7 @@ import os
 from unittest.mock import patch, Mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
 from src.core.stt_manager import STTManager, VadSegmenter
 from src.core.speech_recognizer import SpeechRecognizer, wav_bytes
 from src.core.stt_hotwords import DEFAULT_HOTWORDS, normalize_hotwords
@@ -129,6 +130,49 @@ class ManagerTests(unittest.TestCase):
     def test_default_off_and_status_has_no_credentials(self):
         self.assertFalse(self.manager.enabled)
         self.assertNotIn("secret", str(self.manager.snapshot()))
+
+    def test_denied_permission_never_opens_audio(self):
+        application = Mock()
+        application.checkPermission.return_value = Qt.PermissionStatus.Denied
+        with patch("src.core.stt_manager.sys.platform", "darwin"), patch(
+                "src.core.stt_manager.QCoreApplication.instance", return_value=application), patch(
+                "src.core.stt_manager.QAudioSource") as audio_source:
+            self.manager.enabled = True
+            self.manager._start_capture()
+        audio_source.assert_not_called()
+        self.assertFalse(self.manager.enabled)
+        self.assertIn("权限", self.manager.error)
+
+    def test_permission_requested_once_and_late_grant_does_not_reopen(self):
+        application = Mock()
+        application.checkPermission.return_value = Qt.PermissionStatus.Undetermined
+        with patch("src.core.stt_manager.sys.platform", "darwin"), patch(
+                "src.core.stt_manager.QCoreApplication.instance", return_value=application):
+            self.manager.enabled = True
+            self.assertFalse(self.manager._microphone_permission_ready())
+            self.assertFalse(self.manager._microphone_permission_ready())
+        application.requestPermission.assert_called_once()
+        self.manager.configure(enabled=False)
+        self.manager._tick.reset_mock()
+        application.requestPermission.call_args.args[1](Mock())
+        self.manager._tick.assert_not_called()
+
+    def test_timer_drains_audio_without_ready_read_and_detects_no_input(self):
+        from array import array
+        self.manager.enabled = True
+        self.manager.source = Mock()
+        self.manager.io = Mock()
+        self.manager.io.readAll.return_value = array("h", [1000] * 320).tobytes()
+        self.manager._capture_started = time.monotonic()
+        STTManager._tick(self.manager)
+        self.assertEqual(self.manager.snapshot()["received_bytes"], 640)
+        self.assertGreater(self.manager.level, 0)
+        self.manager._received_bytes = 0
+        self.manager._capture_started = time.monotonic() - 6
+        self.manager.io.readAll.return_value = b""
+        STTManager._tick(self.manager)
+        self.assertFalse(self.manager.enabled)
+        self.assertIn("没有收到音频", self.manager.error)
 
     def test_disable_and_reenable_discards_late_result(self):
         self.begin()

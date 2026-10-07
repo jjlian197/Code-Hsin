@@ -22,7 +22,7 @@ class SettingsTest(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         config = deepcopy(DEFAULT_CONFIG)
         config["sprite"]["renderer"] = "placeholder"
         config["runtime"]["directory"] = str(self.root / "runtime")
@@ -46,6 +46,27 @@ class SettingsTest(unittest.TestCase):
         dialog = SettingsDialog(self.window, **kwargs)
         self.dialogs.append(dialog)
         return dialog
+
+    def test_remote_voice_settings_keep_cloud_choice_without_opening_mic(self):
+        dialog = self.dialog()
+        self.assertGreaterEqual(dialog.fields["stt.provider"].findData("remote"), 0)
+        self.assertGreaterEqual(dialog.fields["stt.provider"].findData("zhipu"), 0)
+        self.assertGreaterEqual(dialog.fields["voice.provider"].findData("remote"), 0)
+        dialog.fields["stt.provider"].setCurrentIndex(dialog.fields["stt.provider"].findData("remote"))
+        dialog.choose_start(None)
+        self.assertEqual(dialog.fields["stt.provider"].currentData(), "remote")
+        dialog.fields["voice.provider"].setCurrentIndex(dialog.fields["voice.provider"].findData("remote"))
+        dialog.fields["speech_bridge.url"].setText("http://127.0.0.1:19881")
+        dialog.fields["speech_bridge.ssh_host"].setText("192.168.50.230")
+        changes = dialog.collect()
+        from src.core.user_settings import save_settings
+        self.assertTrue(save_settings(self.window, changes), "连接变更需重启")
+        saved = yaml.safe_load(self.local.read_text())
+        self.assertEqual(saved["stt"]["provider"], "remote")
+        self.assertIn("zhipu", saved["stt"])
+        self.assertEqual(saved["speech_bridge"]["ssh_host"], "192.168.50.230")
+        self.assertFalse(self.window.stt.enabled)
+        self.assertIsNone(self.window.tts.remote.client.tunnel.process)
 
     def test_idle_release_waits_for_generation_queue_and_real_worker(self):
         import time

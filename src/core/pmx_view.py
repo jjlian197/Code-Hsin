@@ -1,5 +1,6 @@
 """用本地 Three.js/MMDLoader 直接显示 PMX，Qt 保留窗口和拖动控制。"""
 import json
+from pathlib import Path
 import time
 
 from loguru import logger
@@ -12,6 +13,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from src.core.app_config import project_path
 from src.core.character_package import load_character_package
+from src.core.model_digest import ModelDigestLoader
 
 
 class PmxBridge(QObject):
@@ -57,6 +59,8 @@ class PmxView(QWidget):
         self._ready = False
         self._closed = False
         self._request_id = 0
+        self._digest_loader = ModelDigestLoader(self)
+        self._digest_loader.finished.connect(self._digest_ready)
         self._pose_motion = "idle"
         self.view_mode = "full"
         self._texture_overrides = texture_overrides or {}
@@ -202,39 +206,54 @@ class PmxView(QWidget):
         self.label.raise_()
         self.timer.start(45000)
         if self._ready:
-            url = QUrl.fromLocalFile(str(path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-            overrides = {}
-            texture_map = self.character_package["textures"] if self.character_package else self._texture_overrides.get(str(path), {})
-            for source, target in texture_map.items():
-                target_path = project_path(target)
-                if not target_path.is_file():
-                    raise ValueError("贴图补全文件不存在：" + str(target_path))
-                source_url = url[:url.rfind('/') + 1] + source.replace('\\', '/')
-                overrides[source_url] = QUrl.fromLocalFile(str(target_path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-            options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input, "view_mode": self.view_mode}
-            import hashlib
-            options["model_hash"] = hashlib.sha256(path.read_bytes()).hexdigest()
-            if self.character_package:
-                package = self.character_package
-                if options["model_hash"] != package["hash"]:
-                    raise ValueError("角色模型已变化，请重新导入角色包")
-                options.update(rig_map=package["rig"], morph_map=package["morphs"],
-                               allowed_motions=package["capabilities"]["motions"], character=package["name"])
-                options["physics"] = self._physics_enabled and package["capabilities"]["physics"]
-            rig_map_path = next((value for key, value in self._animation_config.get("rig_maps", {}).items()
-                                 if project_path(key) == path), None)
-            if rig_map_path and not self.character_package:
-                rig_path = project_path(rig_map_path)
-                if not rig_path.is_file():
-                    raise ValueError("骨架映射文件不存在：" + str(rig_path))
-                rig_map = json.loads(rig_path.read_text(encoding="utf-8"))
-                if rig_map.get("model", {}).get("sha256") != options["model_hash"]:
-                    raise ValueError("骨架映射与当前 PMX 哈希不匹配，请重新分析")
-                options["rig_map"] = rig_map
-            transition = self._transition_files.get(str(path))
-            if not self.character_package and transition and project_path(transition).is_file():
-                options["transition_url"] = QUrl.fromLocalFile(str(project_path(transition))).toString(QUrl.ComponentFormattingOption.FullyEncoded)
-            self.web.page().runJavaScript(f"window.HsinPmx.loadModel({json.dumps(url)}, {self._request_id}, {json.dumps(overrides)}, {json.dumps(options)});")
+            self._digest_loader.request(self._request_id, path)
+
+    @pyqtSlot(int, str, str)
+    def _digest_ready(self, request_id: int, fingerprint: str, error_message: str) -> None:
+        # 已切换、超时或关闭的请求不能覆盖当前角色。
+        if self._closed or request_id != self._request_id or self.load_error is not None:
+            return
+        if error_message:
+            self._model_result(request_id, False, error_message)
+            return
+        try:
+            self._load_verified_model(self.model_path, fingerprint)
+        except (OSError, ValueError) as exc:
+            self._model_result(request_id, False, str(exc))
+
+    def _load_verified_model(self, path: Path, fingerprint: str) -> None:
+        url = QUrl.fromLocalFile(str(path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+        overrides = {}
+        texture_map = self.character_package["textures"] if self.character_package else self._texture_overrides.get(str(path), {})
+        for source, target in texture_map.items():
+            target_path = project_path(target)
+            if not target_path.is_file():
+                raise ValueError("贴图补全文件不存在：" + str(target_path))
+            source_url = url[:url.rfind('/') + 1] + source.replace('\\', '/')
+            overrides[source_url] = QUrl.fromLocalFile(str(target_path)).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+        options = {"physics": self._physics_enabled, "behavior": self._behavior_settings, "activity": self._activity_input, "view_mode": self.view_mode}
+        options["model_hash"] = fingerprint
+        if self.character_package:
+            package = self.character_package
+            if options["model_hash"] != package["hash"]:
+                raise ValueError("角色模型已变化，请重新导入角色包")
+            options.update(rig_map=package["rig"], morph_map=package["morphs"],
+                           allowed_motions=package["capabilities"]["motions"], character=package["name"])
+            options["physics"] = self._physics_enabled and package["capabilities"]["physics"]
+        rig_map_path = next((value for key, value in self._animation_config.get("rig_maps", {}).items()
+                             if project_path(key) == path), None)
+        if rig_map_path and not self.character_package:
+            rig_path = project_path(rig_map_path)
+            if not rig_path.is_file():
+                raise ValueError("骨架映射文件不存在：" + str(rig_path))
+            rig_map = json.loads(rig_path.read_text(encoding="utf-8"))
+            if rig_map.get("model", {}).get("sha256") != options["model_hash"]:
+                raise ValueError("骨架映射与当前 PMX 哈希不匹配，请重新分析")
+            options["rig_map"] = rig_map
+        transition = self._transition_files.get(str(path))
+        if not self.character_package and transition and project_path(transition).is_file():
+            options["transition_url"] = QUrl.fromLocalFile(str(project_path(transition))).toString(QUrl.ComponentFormattingOption.FullyEncoded)
+        self.web.page().runJavaScript(f"window.HsinPmx.loadModel({json.dumps(url)}, {self._request_id}, {json.dumps(overrides)}, {json.dumps(options)});")
 
     @pyqtSlot(int, bool, str)
     def _model_result(self, request_id, success, details):
@@ -421,6 +440,7 @@ class PmxView(QWidget):
 
     def cleanup(self):
         self._closed = True
+        self._digest_loader.close()
         self.timer.stop()
         self.frame_timer.stop()
         self.web.stop()

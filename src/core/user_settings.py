@@ -37,6 +37,8 @@ def save_settings(owner, changes):
         owner.chat.config = deepcopy(candidate["chat"])
         owner.chat.configure(candidate["chat"]["provider"])
     voice = candidate["voice"]
+    if previous["voice"].get("remote_voice", "hsin") != voice.get("remote_voice", "hsin"):
+        owner.tts.configure_resources(voice, presets=owner.characters.active == "hsin")
     owner.tts.configure(**{name: voice[name] for name in ("enabled", "language", "provider", "auto_translate", "fallback")})
     owner.tts.volume = voice["volume"]
     owner.voice_player.output.setVolume(voice["volume"])
@@ -53,7 +55,8 @@ def save_settings(owner, changes):
         updated = profile_from_config(candidate, profile["name"], profile["package"], profile["persona"])
         updated["id"] = profile["id"]
         owner.characters.save(updated)
-    restart = any(previous[name] != candidate[name] for name in ("http", "websocket"))
+    restart = previous.get("speech_bridge", {}) != candidate.get("speech_bridge", {})
+    restart |= any(previous[name] != candidate[name] for name in ("http", "websocket"))
     restart |= any(previous["voice"][name] != voice[name] for name in ("profiles", "port"))
     restart |= previous["voice"].get("qwen") != voice.get("qwen")
     restart |= previous["sprite"]["model"] != candidate["sprite"]["model"]

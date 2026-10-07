@@ -47,9 +47,10 @@ class CharacterSettingsPage(QScrollArea):
         self.persona.setMaximumHeight(140)
         form.addRow("人设", self.persona)
         for key, label, choices in (("chat.provider", "聊天后端", (("Hermes", "hermes"), ("DeepSeek", "deepseek"), ("Qwen · Ollama", "ollama"), ("OpenClaw", "openclaw"))),
-            ("voice.provider", "TTS引擎", (("GPT-SoVITS", "gptsovits"), ("Qwen", "qwen"), ("Edge 通用音色", "edge"))),
+            ("voice.provider", "TTS引擎", (("PC 语音桥接", "remote"), ("GPT-SoVITS", "gptsovits"), ("Qwen", "qwen"), ("Edge 通用音色", "edge"))),
             ("voice.language", "回复语言", (("中文", "zh"), ("日本語", "ja")))):
             self.add(form, key, label, choices=choices)
+        self.add(form, "voice.remote_voice", "PC 音色", choices=(("心", "hsin"), ("爱弥斯", "aemeath")))
         self.add(form, "chat.enabled", "启用AI对话", check=True)
         for key, label in (("chat.hermes.profile", "Hermes Agent"), ("chat.openclaw.agent", "OpenClaw Agent"),
                            ("chat.deepseek.model", "DeepSeek 模型"), ("chat.ollama.model", "Ollama 模型")):
