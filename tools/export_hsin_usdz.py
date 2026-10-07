@@ -11,6 +11,8 @@ from typing import Any
 from PIL import Image
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdSkel, UsdUtils, Vt
 
+from tools.spatial_face_mesh import merge_face_meshes
+
 FACE_NAMES = {'まばたき': 'blink', '笑い': 'smile', 'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o'}
 
 
@@ -167,6 +169,8 @@ def export(sample_path: Path, output: Path, shared_textures: Path | None = None)
         if names:
             binding.CreateBlendShapesAttr(names)
             binding.CreateBlendShapeTargetsRel().SetTargets(targets)
+    face_report = merge_face_meshes(stage)
+    (output / 'face-binding.json').write_text(json.dumps(face_report, indent=2))
     stage.Export(str(output / 'model.usdc'))
     clips = output / 'Motions'
     clips.mkdir(exist_ok=True)

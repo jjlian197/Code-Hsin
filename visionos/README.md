@@ -1,8 +1,8 @@
 # 心 · Hsin Spatial（visionOS 开发原型）
 
-2026-10-07：**Build 5 已安装到用户 AVP**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
+2026-10-08：**Build 5 已安装到用户 AVP；Build 6 已通过模拟器验证与真机签名构建，等待设备连接后安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
 
-当前主线为阶段 3 的面部表现修复：睫毛不随眼睑运动、单一口型不自然均已记录，尚未修复。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
+当前主线为阶段 3 的面部表现修复：Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
 
 ## 本机资源与构建
 
@@ -21,7 +21,7 @@ xcodebuild -project visionos/HsinVision.xcodeproj -scheme HsinVision \
 
 应用默认地址 `https://bridge.oieasklja.icu`，仅保存这个公开地址；发行包不含访问令牌或聊天 API Key。首次在“桥接设置”填写访问令牌并保存，令牌按地址保存到 Keychain。Mac 私有令牌文件位于 `~/Library/Application Support/Hsin/bridge-token`；请用户自行查看并输入头显，避免发到聊天或截图。
 
-“测试专属音色”先验证桥接身份、协议与当前角色音色指纹，再请求新句 WAV。音频实际开始播放才显示台词；停止会关闭本地播放、取消网络请求，并向 PC 发送请求编号。已运行的 GPU 推理可能继续结束，但旧结果不播放。口型当前仅按音量驱动 `a`，并非逐音素对齐。
+“测试专属音色”先验证桥接身份、协议与当前角色音色指纹，再请求新句 WAV。音频实际开始播放才显示台词；停止会关闭本地播放、取消网络请求，并向 PC 发送请求编号。已运行的 GPU 推理可能继续结束，但旧结果不播放。Build 6 口型使用 PCM 能量门控、文本元音提示和实际播放时钟，平滑混合 `a/i/u/e/o`；属于近似提示，并非逐音素对齐。
 
 PC 域名入口提供 STT/TTS；文字与语音对话经过 Mac 网关，复用 Mac 私有聊天配置、角色设定与智谱密钥。Mac → PC 使用 HTTPS，头显无需 SSH 私钥或聊天 API Key。
 
@@ -56,9 +56,9 @@ Build 4 修复骨骼动作目标选择：RealityKit 顶层包含 `global scene a
 
 HTTP/WS 只用于可信局域网，界面明确提示未加密；跨网部署使用 `--cert`／`--key` 或 HTTPS 反向代理与 WSS。客户端拒绝公共地址的 HTTP。网关 `/health`、`/ws` 均需 Bearer 鉴权，最多四个并发会话；关闭后清理临时录音，不向桌面角色发送播放命令。OpenClaw 会话历史由上方配置决定。
 
-输入文字并发送，或主动点击“开始录音”，说完后停止。启动不会申请录音权限或开启麦克风；录音最多 25 秒，转换为 16 kHz 单声道 Int16 WAV。STT 可选 PC 桥接或智谱；选择变化会停止旧回合。当前界面只使用爱弥斯，网关可处理心与爱弥斯各自的设定／音色。
+输入文字并发送，或主动点击“开始录音”，说完后停止。启动不会申请录音权限或开启麦克风；录音最多 25 秒，转换为 16 kHz 单声道 Int16 WAV。STT 可选 PC 桥接或智谱；选择变化会停止旧回合。界面支持心与爱弥斯，网关处理各自的设定、后端与音色。
 
-协议使用 `turn_id` 与句子 `index` 丢弃迟到消息，整句 WAV 顺序播放。`playback_started` 仅在 `AVAudioPlayer.play()` 成功后发送；解码或播放失败发送 `audio_discarded`，释放队列额度但不声称已经播放。最多两段尚未开始的音频可在途；字幕对应正在播放的句子，全文单独展示。停止、地址变化和断线关闭会话并使旧结果失效。
+协议使用 `turn_id` 与句子 `index` 丢弃迟到消息，整句 WAV 顺序播放。`playback_started` 仅在 `AVAudioPlayer.play()` 成功后发送；解码或播放失败发送 `audio_discarded`，释放队列额度但不声称已经播放。最多两段尚未开始的音频可在途；字幕对应正在播放的句子，全文单独展示。停止使旧回合失效并保留聊天连接；地址变化和断线关闭会话。
 
 ## 已验证与待验收
 
@@ -68,8 +68,10 @@ HTTP/WS 只用于可信局域网，界面明确提示未加密；跨网部署使
 - 网关 9 项自动化测试通过，覆盖鉴权、直连会话隔离、句子顺序、录音校验、取消、播放额度、原生二进制录音与 OpenClaw 选择。真实聊天／TTS 返回有效 WAV；同一固定录音经 PC 与智谱均正确识别。验证脚本模拟播放 ACK，不代表头显实际播放。
 - Build 2 已更新到用户 AVP；用户打开后，不含令牌的设备回执确认 PC／Mac 两个连接均已保存到 Keychain，一次性配置文件已消费。签名包扫描确认不含访问令牌。
 - 尚未验收头显麦克风、实际声音／口型、简化界面的真机外观、空间尺寸和手势；安装成功不代表上述行为已验收。
-- Build 5：心 PMX 转 USDZ 与双形态已交付，12 项针对性检查通过；下一步为睫毛／多口型修复及 AVP 收音、播放、动作外观验收。以上较早版本的验证条目保留作历史记录。
+- Build 5：心 PMX 转 USDZ 与双形态已交付，12 项针对性检查通过；后续由 Build 6 接入睫毛／多口型修复；AVP 收音、播放、动作外观仍待验收。以上较早版本的验证条目保留作历史记录。
+
+- Build 6：心双形态与爱弥斯面部网格修复，原生模拟器已观察睫毛同步；中日真实 WAV 的口型检查与静音原生播放通过，日语实际产生五口型并在结束时归零。模拟器和真机签名构建通过；AVP 离线，尚未更新。
 
 ## 参考来源
 
-参考本机 Aemeath spirit HEAD `68ce5e0` 的 `visionos/`；工程骨架来自其 Xcode 项目，体积窗口、模型摆放与面部权重映射参考 `App/CompanionStore.swift`。Hsin 的 HTTPS 协议与音色选择为本项目实现。未修改参考项目，迁移来源不代表取得对外分发私有模型的许可。
+参考本机 Aemeath spirit HEAD `68ce5e0` 的 `visionos/`；工程骨架来自其 Xcode 项目，体积窗口、模型摆放与面部权重映射参考 `App/CompanionStore.swift`，面部网格合并依据 `Tools/export_usdz.py` 的睫毛导入问题记录；本项目扩展到眼白和口腔网格，并保留材质。Hsin 的 HTTPS 协议与音色选择为本项目实现。未修改参考项目，迁移来源不代表取得对外分发私有模型的许可。

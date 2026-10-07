@@ -4,6 +4,9 @@ import argparse
 import json
 from pathlib import Path
 import shutil
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.repair_spatial_face import repair
 
 
 def main() -> None:
@@ -22,7 +25,10 @@ def main() -> None:
         shutil.copy2(source_root / relative, output)
     manifest = json.loads((source_root / 'Motions/manifest.json').read_text())
     (output_root / 'Motions/manifest.json').write_text(json.dumps({name: manifest[name] for name in ('idle', 'wave')}))
-    print('Prepared Aemeath, idle and wave private assets; originals untouched.')
+    repaired = Path(__file__).resolve().parents[1] / '.runtime/aemeath-face-preparation'
+    repair(output_root / 'Aemeath.usdz', repaired)
+    shutil.copy2(repaired / 'Aemeath.usdz', output_root / 'Aemeath.usdz')
+    print('Prepared Aemeath with unified face morphs, idle and wave; originals untouched.')
 
 
 if __name__ == '__main__':

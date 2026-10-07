@@ -39,7 +39,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var gatewayInterrupt: Task<Void, Error>?
     private var gatewayTurn: String?
     private var turnFinished = true
-    private struct AudioClip { let audio: Data; let text: String; let index: Int }
+    private struct AudioClip { let audio: Data; let text: String; let index: Int; let mouth: SpeechMouthTimeline }
+    private var mouthTimeline: SpeechMouthTimeline?
+    private var mouthSmoother = SpeechMouthSmoother()
+    private var lastFaceUpdate = Date()
+    #if DEBUG
+    private var mouthProbeCounts: [String: Int] = [:]
+    #endif
     private var pendingAudio: [AudioClip] = []
     @Published var language = "zh" { didSet { if language != oldValue { stopSpeech() } } }
     @Published private(set) var status = "正在加载角色"
@@ -63,6 +69,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     override init() {
         super.init()
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--character-aemeath") { selectedCharacter = "aemeath" }
+        if ProcessInfo.processInfo.arguments.contains("--form-first") { selectedForm = "first" }
         if ProcessInfo.processInfo.arguments.contains("--character-hsin") { selectedCharacter = "hsin" }
         if ProcessInfo.processInfo.arguments.contains("--form-second") { selectedForm = "second" }
         #endif
@@ -173,11 +181,18 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             guard requestedResource == modelResource else { return }
             loaded.scale = SIMD3<Float>(repeating: 0.35)
             loaded.position = SIMD3<Float>(0, -0.53, 0)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--face-closeup") {
+                loaded.scale = SIMD3<Float>(repeating: 1.15)
+                loaded.position = SIMD3<Float>(0, -1.65, 0)
+            }
+            #endif
             character?.removeFromParent()
             content.add(loaded)
             character = loaded
             faces = facialEntities(in: loaded)
             NSLog("[HsinVision] Facial entities %@", faces.map { $0.name }.joined(separator: ","))
+            NSLog("[HsinVision] Facial groups %@", faces.flatMap { $0.components[BlendShapeWeightsComponent.self]?.weightSet.map { $0.weightNames.joined(separator: ",") } ?? [] }.joined(separator: " | "))
             // Top-level "global scene animation" is a container animation, not the skinned target.
             // Match the imported bone clip, as the reference's findWaveAnimation does.
             motionRoot = animationBinding(in: loaded, name: "wave")?.entity
@@ -203,6 +218,28 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             modelReady = true
             status = characterName + "已就位；麦克风关闭"
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--speech-probe") {
+                let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("SpeechProbe.wav")
+                let selectedLanguage = language
+                let text = ProcessInfo.processInfo.arguments.contains("--speech-probe-ja") ? "父さん、エイメスはそばにいるよ。" : "父亲，这是外网桥接测试，爱弥斯已经准备好了。"
+                speechTask = Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let audio = try Data(contentsOf: file)
+                        let timeline = await Task.detached { SpeechMouthTimeline(audio: audio, text: text, language: ProcessInfo.processInfo.arguments.contains("--speech-probe-ja") ? "ja" : selectedLanguage) }.value
+                        try Task.checkCancellation()
+                        mouthTimeline = timeline
+                        mouthSmoother.reset()
+                        let next = try AVAudioPlayer(data: audio)
+                        next.volume = 0
+                        next.delegate = self
+                        player = next
+                        busy = true
+                        guard next.play() else { throw BridgeError.message("测试音频未播放") }
+                        NSLog("[HsinVision] Speech probe started duration %.3f cues %@", next.duration, Set(timeline.cues).sorted().joined(separator: ","))
+                    } catch { status = "测试音频失败" }
+                }
+            }
             // Native smoke runs use the same action as the UI button, without touching audio input.
             if ProcessInfo.processInfo.arguments.contains("--motion-smoke-test") {
                 wave()
@@ -278,21 +315,43 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             blink = Float(max(0, 1 - abs(elapsed - 0.12) / 0.12))
             if elapsed > 0.24 { blinkStart = nil; nextBlink = now.addingTimeInterval(.random(in: 2...6)) }
         }
-        var mouth: Float = 0
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--face-probe-blink") { blink = 1 }
+        if ProcessInfo.processInfo.arguments.contains("--face-probe-neutral") { blink = 0 }
+        if ProcessInfo.processInfo.arguments.contains("--face-probe-half-blink") { blink = 0.5 }
+        #endif
+        let elapsed = now.timeIntervalSince(lastFaceUpdate)
+        lastFaceUpdate = now
+        var target: [String: Float] = [:]
         if let player, player.isPlaying {
-            player.updateMeters()
-            mouth = Float(max(0, min(1, (player.averagePower(forChannel: 0) + 48) / 36)))
-        }
-        for face in faces {
-        guard var component = face.components[BlendShapeWeightsComponent.self] else { continue }
-        for entry in component.weightSet {
-            var updated = entry
-            for (index, name) in entry.weightNames.enumerated() {
-                updated.weights[index] = name == "blink" ? blink * 1.12 : name == "a" ? mouth * 0.8 : 0
+            target = mouthTimeline?.weights(at: player.currentTime) ?? [:]
+            if mouthTimeline?.levels.isEmpty != false {
+                player.updateMeters()
+                target = ["a": Float(max(0, min(0.8, (player.averagePower(forChannel: 0) + 48) / 45)))]
             }
-            _ = component.weightSet.set(updated)
+        } else { mouthSmoother.reset() }
+        var mouthWeights = mouthSmoother.update(target, elapsed: elapsed)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--speech-probe"), let player, player.isPlaying,
+           let dominant = mouthWeights.max(by: { $0.value < $1.value }), dominant.value > 0.01 {
+            mouthProbeCounts[dominant.key, default: 0] += 1
         }
-        face.components.set(component)
+        if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--face-probe-") }),
+           SpeechMouthTimeline.vowels.contains(String(argument.dropFirst("--face-probe-".count))) {
+            mouthWeights = [String(argument.dropFirst("--face-probe-".count)): 0.8]
+            blink = 0
+        }
+        #endif
+        for face in faces {
+            guard var component = face.components[BlendShapeWeightsComponent.self] else { continue }
+            for entry in component.weightSet {
+                var updated = entry
+                for (index, name) in entry.weightNames.enumerated() {
+                    updated.weights[index] = name == "blink" ? blink * (selectedCharacter == "hsin" ? 1 : 1.12) : mouthWeights[name] ?? 0
+                }
+                _ = component.weightSet.set(updated)
+            }
+            face.components.set(component)
         }
     }
 
@@ -374,11 +433,18 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 try Task.checkCancellation()
                 guard turn == generation else { return }
                 activeRequest = nil
+                let timeline = await Task.detached(priority: .userInitiated) {
+                    SpeechMouthTimeline(audio: audio, text: text, language: selectedLanguage)
+                }.value
+                try Task.checkCancellation()
+                guard turn == generation else { return }
                 let next = try AVAudioPlayer(data: audio)
                 next.isMeteringEnabled = true
                 next.delegate = self
                 guard next.play() else { throw BridgeError.message("音频未能播放") }
                 player = next
+                mouthTimeline = timeline
+                mouthSmoother.reset()
                 caption = text
                 status = "正在播放"
             } catch {
@@ -441,7 +507,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     while !Task.isCancelled {
                         let event = try await decodeEvent(socket.receive())
                         guard gatewaySocket === socket else { return }
-                        applyGatewayEvent(event)
+                        await applyGatewayEvent(event)
                     }
                 } catch {
                     guard gatewaySocket === socket else { return }
@@ -502,7 +568,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
-    private func applyGatewayEvent(_ event: GatewayEvent) {
+    private func applyGatewayEvent(_ event: GatewayEvent) async {
         guard event.turn_id == gatewayTurn, gatewayTurn != nil else { return }
         switch event.type {
         case "transcript":
@@ -512,7 +578,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         case "reply_delta": fullReply += event.text ?? ""
         case "sentence_audio":
             if let encoded = event.audio_base64, let audio = Data(base64Encoded: encoded), !audio.isEmpty {
-                pendingAudio.append(AudioClip(audio: audio, text: event.text ?? "", index: event.index ?? -1))
+                let text = event.text ?? ""
+                let language = self.language
+                let timeline = await Task.detached(priority: .userInitiated) {
+                    SpeechMouthTimeline(audio: audio, text: text, language: language)
+                }.value
+                guard event.turn_id == gatewayTurn, gatewayTurn != nil else { return }
+                pendingAudio.append(AudioClip(audio: audio, text: text, index: event.index ?? -1, mouth: timeline))
                 playNextSentence()
             } else {
                 caption = event.text ?? ""
@@ -522,6 +594,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             pendingAudio.removeAll()
             player?.stop()
             player = nil
+            mouthTimeline = nil
+            mouthSmoother.reset()
             fullReply = event.reply ?? ""
             caption = fullReply
         case "turn_done":
@@ -567,6 +641,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             next.delegate = self
             guard next.play() else { throw BridgeError.message("音频播放失败") }
             player = next
+            mouthTimeline = clip.mouth
+            mouthSmoother.reset()
             acknowledgePlayback(clip.index)
             caption = clip.text
             status = "正在播放"
@@ -642,6 +718,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         speechTask = nil
         player?.stop()
         player = nil
+        mouthTimeline = nil
+        mouthSmoother.reset()
         busy = false
         caption = ""
         if let identity = activeRequest, let base = try? endpoint(),
@@ -657,6 +735,11 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.player === player else { return }
             self.player = nil
+            self.mouthTimeline = nil
+            self.mouthSmoother.reset()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--speech-probe") { NSLog("[HsinVision] Speech probe finished success %d mouth reset, counts %@", flag, self.mouthProbeCounts.description) }
+            #endif
             if !flag { self.status = "播放失败" }
             self.playNextSentence()
             if self.player == nil && self.pendingAudio.isEmpty && self.turnFinished {
