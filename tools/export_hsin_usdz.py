@@ -193,6 +193,8 @@ def export(sample_path: Path, output: Path, shared_textures: Path | None = None)
         package_stage(clips / (motion['name'] + '.usdc'), clips / (motion['name'] + '.usdz'))
     package_stage(output / 'model.usdc', output / 'Hsin.usdz')
     (clips / 'manifest.json').write_text(json.dumps({motion['name']: {'duration': motion['duration'], 'looping': motion['looping']} for motion in sample['motions']}))
+    if 'posture' in sample:
+        (clips / 'posture.json').write_text(json.dumps(sample['posture'], indent=2))
     (output / 'provenance.json').write_text(json.dumps({'source_sha256': sample['sha256'], 'height_m': 1.65, 'shared_textures': str(shared_textures) if shared_textures else None,
         'limitations': ['SDEF treated as linear skinning', 'MMD outline/toon and real-time cloth not yet ported']}))
     print(f"Exported Hsin: {len(sample['vertices'])} vertices, {len(sample['bones'])} joints")

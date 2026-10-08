@@ -48,6 +48,10 @@ struct CompanionView: View {
                     Button("比耶") { companion.gesture("peace", label: "比耶") }
                     Button("比心") { companion.gesture("finger_heart", label: "比心") }
                     Button("双臂交叉") { companion.gesture("crossed_arms", label: "双臂交叉") }
+                    Divider()
+                    Button(companion.posture.wantsLying ? "站起来" : "侧躺休息") {
+                        companion.requestPosture(lying: !companion.posture.wantsLying)
+                    }.disabled(!companion.canChangePosture)
                 }.disabled(!companion.modelReady)
             }
             Button(companion.busy ? "打断" : companion.isListening ? "结束说话" : "和\(companion.characterName)说话",

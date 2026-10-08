@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import * as THREE from '../src/assets/pmx_viewer/lib/three/three.module.js';
 import {Parser} from '../src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.module.js';
 import {createBuiltinClips} from '../src/assets/pmx_viewer/motions.js';
+import {createSpatialMesh} from './spatial_sampling.mjs';
 
 const [modelPath, outputPath] = process.argv.slice(2);
 if (!modelPath || !outputPath) throw new Error('Usage: bake_hsin_spatial.mjs model.pmx output.json');
@@ -11,17 +12,8 @@ const original = fs.readFileSync(modelPath);
 const model = new Parser().parsePmx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), true);
 const heights = model.vertices.map(vertex => vertex.position[1]);
 const scale = 1.65 / (Math.max(...heights) - Math.min(...heights));
-const mesh = new THREE.SkinnedMesh();
-const bones = model.bones.map(source => {
-  const bone = new THREE.Bone();
-  bone.name = source.name;
-  bone.position.fromArray(source.position);
-  if (source.parentIndex >= 0) bone.position.sub(new THREE.Vector3().fromArray(model.bones[source.parentIndex].position));
-  return bone;
-});
-bones.forEach((bone, index) => (model.bones[index].parentIndex >= 0 ? bones[model.bones[index].parentIndex] : mesh).add(bone));
-mesh.bind(new THREE.Skeleton(bones));
-mesh.updateMatrixWorld(true);
+const mesh = createSpatialMesh(model);
+const bones = mesh.skeleton.bones;
 const clips = createBuiltinClips(mesh);
 const selectedNames = ['idle', 'wave', 'nod', 'peace', 'finger_heart', 'crossed_arms'];
 const animatedNames = new Set(selectedNames.flatMap(name => clips[name].tracks.map(track => /\.bones\[(.*?)\]/.exec(track.name)?.[1]).filter(Boolean)));

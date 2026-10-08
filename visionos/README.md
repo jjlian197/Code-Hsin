@@ -1,8 +1,8 @@
 # 心 · Hsin Spatial（visionOS 开发原型）
 
-2026-10-08：**Build 5 已安装到用户 AVP；Build 6 已通过模拟器验证与真机签名构建，等待设备连接后安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
+2026-10-08：**AVP 保持 Build 5；Build 6 面部修复已完成，Build 7 新增 Hsin 侧躺／起身，本轮按用户要求不安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
 
-当前主线为阶段 3 的面部表现修复：Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
+当前主线为阶段 3 的 Hsin 侧躺、站立与独立过渡；面部表现方面，Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
 
 ## 本机资源与构建
 
@@ -71,6 +71,23 @@ HTTP/WS 只用于可信局域网，界面明确提示未加密；跨网部署使
 - Build 5：心 PMX 转 USDZ 与双形态已交付，12 项针对性检查通过；后续由 Build 6 接入睫毛／多口型修复；AVP 收音、播放、动作外观仍待验收。以上较早版本的验证条目保留作历史记录。
 
 - Build 6：心双形态与爱弥斯面部网格修复，原生模拟器已观察睫毛同步；中日真实 WAV 的口型检查与静音原生播放通过，日语实际产生五口型并在结束时归零。模拟器和真机签名构建通过；AVP 离线，尚未更新。
+
+## Build 7：侧躺与站立
+
+心双形态“动作”菜单新增“侧躺休息／站起来”，只在匹配的三个姿态资源均加载后开放。使用 macOS 校准的独立躺下、起身片段，中途反向请求完成当前支撑段后再执行；重复请求保持进度。侧躺时请求手势先起身，新的姿态请求覆盖先前排队手势。切换模型清空队列，使旧加载与播放控制器失效。
+
+状态依赖实际动画完成事件／控制器状态，模型按整条路径适配一次取景；过渡中位置、尺寸及模型空间地面不变。所有片段写入完整骨架，起身后恢复根节点、腿部和衣发辅助骨。衣发为桌面 PoseCloth 离线采样，侧躺稳定定格；实时物理、逐顶点地面投影和 AVP 接触／穿模验收仍未完成。爱弥斯未开放未经其骨架校准的姿态。
+
+资源制作见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)。Debug 模拟器与 Release 真机目标（无签名）构建通过；双形态实际往返及一阶段途中反向／排队手势检查通过。一阶段躺下、侧躺、起身画面已观察；Mac 锁定后的二阶段姿态及最终站姿画面复验保留为待办。本轮没有更新 AVP。
+
+Debug 原生姿态检查不启用麦克风：
+
+```sh
+xcrun simctl launch <模拟器ID> com.hsin.spatial \
+  --character-hsin --form-first --posture-probe --posture-probe-roundtrip
+```
+
+仅 `--posture-probe` 会躺下并保持；`--posture-probe-phase=0.5` 检查躺下中段，`--posture-probe-getup-phase=0.5` 检查起身中段，`--posture-probe-reverse` 在躺下途中请求站立。私有 `Documents/PostureProbe.json` 记录进程与真实状态顺序，检查者须等对应进程回执；启动／加载耗时不能计入动作完成时间。Release 不包含测试入口。
 
 ## 参考来源
 

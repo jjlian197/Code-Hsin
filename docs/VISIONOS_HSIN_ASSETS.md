@@ -26,3 +26,18 @@ node --loader ./tools/node_three_loader.mjs tools/bake_hsin_spatial.mjs /path/�
 ```
 
 输出包含修复后的 USDZ、源文件 SHA-256 和 `face-repair.json`，参考项目及原始 PMX／贴图保持只读。Build 6 原生模拟器已观察三种模型的全闭眼及心一阶段半闭眼；AVP 外观和口型自然度仍需验收。
+
+## Build 7：侧躺与起身
+
+使用与原 PMX 哈希匹配的 macOS 校准 JSON，转换器拒绝与当前几何采样不匹配的模型。先生成上文的几何采样，再追加姿态：
+
+```sh
+node --loader ./tools/node_three_loader.mjs tools/bake_hsin_postures.mjs .runtime/hsin-spatial/first.json src/assets/motions/first.json .runtime/hsin-spatial/posture-first.json
+.venv/bin/python -m tools.export_hsin_usdz .runtime/hsin-spatial/posture-first.json .runtime/hsin-spatial/posture-export-first
+node --loader ./tools/node_three_loader.mjs tools/bake_hsin_postures.mjs .runtime/hsin-spatial/second.json src/assets/motions/second.json .runtime/hsin-spatial/posture-second.json
+.venv/bin/python -m tools.export_hsin_usdz .runtime/hsin-spatial/posture-second.json .runtime/hsin-spatial/posture-export-second --shared-textures /path/心_一阶段
+```
+
+`src/assets/motions/{first,second}.json` 为本机私有校准资源，不提交 Git。输出九个完整骨架片段，新增独立躺下、起身与稳定侧躺；所有动作恢复全套骨骼，PMX Grant 在转换侧求值，衣发复用 PoseCloth 离线采样。将各输出 `Hsin.usdz`、`Motions/*.usdz`、`manifest.json` 和新增 `posture.json` 复制到对应 Characters 目录。`posture.json` 记录校准文件哈希、PMX 哈希、固定模型空间地面、整条路径包围盒与物理限制；没有此文件的旧资源仍可加载，但不能获得完整路径取景。
+
+离线采样不等价于实时物理，侧躺使用稳定定格；桌面逐顶点落地投影尚未迁移。原 PMX、贴图、校准 JSON 和参考模型均保持只读。

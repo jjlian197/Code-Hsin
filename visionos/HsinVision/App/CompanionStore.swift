@@ -58,7 +58,16 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var motions: [String: AnimationResource] = [:]
     private var motionDurations: [String: Double] = [:]
     private var motionPlayback: AnimationPlaybackController?
-    private var returnToIdle: Task<Void, Never>?
+    @Published private(set) var posture = PostureState()
+    var canChangePosture: Bool { selectedCharacter == "hsin" && ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
+    private var motionCompletion: EventSubscription?
+    private var activeMotion = "idle"
+    private var pendingGesture: (name: String, label: String)?
+    private var modelGeneration = 0
+    #if DEBUG
+    private var postureProbeTask: Task<Void, Never>?
+    private var postureProbeHistory: [String] = []
+    #endif
     private var speechTask: Task<Void, Never>?
     private var player: AVAudioPlayer?
     private var generation = 0
@@ -83,8 +92,9 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func changeCharacter() {
+        modelGeneration += 1
         stopSpeech()
-        returnToIdle?.cancel()
+        resetPosture()
         modelReady = false
         transcript = ""
         caption = ""
@@ -168,19 +178,30 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func load(into content: RealityViewContent) async {
+        modelGeneration += 1
+        let requestedGeneration = modelGeneration
         let requestedResource = modelResource
         let directory = resourceDirectory
         modelReady = false
+        resetPosture()
+        motionRoot = nil
+        faces = []
         motions.removeAll()
+        motionDurations.removeAll()
         guard let url = Bundle.main.url(forResource: selectedCharacter == "hsin" ? "Hsin" : "Aemeath", withExtension: "usdz", subdirectory: directory) else {
             status = "缺少开发模型，请先运行资源准备工具"
             return
         }
         do {
             let loaded = try await Entity(contentsOf: url)
-            guard requestedResource == modelResource else { return }
+            guard requestedResource == modelResource, requestedGeneration == modelGeneration else { return }
             loaded.scale = SIMD3<Float>(repeating: 0.35)
             loaded.position = SIMD3<Float>(0, -0.53, 0)
+            if let directory,
+               let envelopeURL = Bundle.main.url(forResource: "posture", withExtension: "json", subdirectory: directory + "/Motions"),
+               let envelope = try? JSONDecoder().decode(PostureEnvelope.self, from: Data(contentsOf: envelopeURL)) {
+                envelope.place(loaded)
+            }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--face-closeup") {
                 loaded.scale = SIMD3<Float>(repeating: 1.15)
@@ -205,12 +226,17 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             for name in motionDurations.keys.sorted() {
                 if let clipURL = Bundle.main.url(forResource: name, withExtension: "usdz", subdirectory: motionDirectory) {
                     let clip = try await Entity(contentsOf: clipURL)
-                    guard requestedResource == modelResource else { return }
+                    guard requestedResource == modelResource, requestedGeneration == modelGeneration else { return }
                     NSLog("[HsinVision] %@ animations %@", name, animationInventory(in: clip))
                     motions[name] = animationBinding(in: clip, name: name)?.animation
                 }
             }
             NSLog("[HsinVision] Model root %@, motions %@", motionRoot?.name ?? "missing", motions.keys.sorted().joined(separator: ","))
+            motionCompletion = content.subscribe(to: AnimationEvents.PlaybackCompleted.self, on: motionRoot) { [weak self] event in
+                let completed = event.playbackController
+                // Restore after event dispatch; a late event must not interrupt a newer controller.
+                Task { @MainActor [weak self] in self?.finishMotion(completed) }
+            }
             guard motions["wave"] != nil, playMotion("idle") else {
                 status = "骨骼动作未加载，请检查模型与动作资源"
                 return
@@ -240,15 +266,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     } catch { status = "测试音频失败" }
                 }
             }
-            // Native smoke runs use the same action as the UI button, without touching audio input.
-            if ProcessInfo.processInfo.arguments.contains("--motion-smoke-test") {
-                wave()
-                returnToIdle?.cancel()
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(min(2.5, (self?.motionDurations["wave"] ?? 3) * 0.4)))
-                    self?.motionPlayback?.pause()
-                }
-            }
+            startPostureProbe()
             #endif
         } catch { status = "模型加载失败：\(error.localizedDescription)" }
     }
@@ -284,8 +302,9 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
         // Separately imported skeleton clips need the direct handoff used by the reference renderer.
         // Stopping the previous controller after starting the new one can restore the bind pose.
-        motionPlayback = root.playAnimation(name == "idle" ? animation.repeat() : animation,
+        motionPlayback = root.playAnimation(["idle", "side_lying"].contains(name) ? animation.repeat() : animation,
                                              transitionDuration: 0, startsPaused: false)
+        activeMotion = name
         NSLog("[HsinVision] Motion playback %@", name)
         return true
     }
@@ -293,20 +312,158 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func wave() { gesture("wave", label: "挥手") }
 
     func gesture(_ name: String, label: String) {
-        returnToIdle?.cancel()
-        guard playMotion(name) else { return }
-        let actionStatus = label + "中"
-        if !busy && !isListening { status = actionStatus }
-        let duration = motionDurations[name] ?? 3
-        returnToIdle = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            self?.playMotion("idle")
-            if self?.status == actionStatus { self?.status = label + "完成" }
+        guard modelReady, motions[name] != nil else { return }
+        if posture.phase != .standing {
+            pendingGesture = (name, label)
+            requestPosture(lying: false, preserveGesture: true)
+            return
+        }
+        guard activeMotion != name, playMotion(name) else { return }
+        if !busy && !isListening { status = label + "中" }
+    }
+
+    func requestPosture(lying: Bool, preserveGesture: Bool = false) {
+        guard modelReady, canChangePosture else { return }
+        if !preserveGesture { pendingGesture = nil }
+        if let next = posture.request(lying: lying) { _ = playMotion(next) }
+        updatePostureStatus()
+        #if DEBUG
+        writePostureProbeReceipt()
+        #endif
+    }
+
+    private func finishMotion(_ completed: AnimationPlaybackController) {
+        guard completed == motionPlayback, completed.isComplete else { return }
+        let finished = activeMotion
+        if let next = posture.completed(finished) {
+            _ = playMotion(next)
+            if next == "idle", let queued = pendingGesture {
+                pendingGesture = nil
+                gesture(queued.name, label: queued.label)
+            } else { updatePostureStatus() }
+        } else if posture.phase == .standing, finished != "idle" {
+            _ = playMotion("idle")
+            if !busy && !isListening { status = "动作完成" }
+        }
+        NSLog("[HsinVision] Motion completed %@, posture %@, next %@", finished, posture.phase.rawValue, activeMotion)
+        #if DEBUG
+        writePostureProbeReceipt()
+        #endif
+    }
+
+    private func updatePostureStatus() {
+        guard !busy && !isListening else { return }
+        switch posture.phase {
+        case .standing: status = "已站立"
+        case .lyingDown: status = posture.wantsLying ? "正在躺下" : "躺稳后起身"
+        case .sideLying: status = "侧躺休息中"
+        case .gettingUp: status = posture.wantsLying ? "站稳后侧躺" : "正在起身"
         }
     }
 
+    private func resetPosture() {
+        motionCompletion?.cancel()
+        motionCompletion = nil
+        motionPlayback = nil
+        posture = PostureState()
+        activeMotion = "idle"
+        pendingGesture = nil
+        #if DEBUG
+        postureProbeTask?.cancel()
+        postureProbeTask = nil
+        postureProbeHistory = []
+        #endif
+    }
+
+    private struct PostureEnvelope: Decodable {
+        struct Bounds: Decodable { let min: [Float]; let max: [Float] }
+        let floor: Float
+        let bounds: Bounds
+        func place(_ entity: Entity) {
+            guard bounds.min.count == 3, bounds.max.count == 3, floor.isFinite,
+                  (bounds.min + bounds.max).allSatisfy({ $0.isFinite }) else { return }
+            let low = SIMD3<Float>(bounds.min[0], bounds.min[1], bounds.min[2])
+            let high = SIMD3<Float>(bounds.max[0], bounds.max[1], bounds.max[2])
+            let extent = high - low
+            guard extent.x > 0, extent.y > 0, extent.z > 0 else { return }
+            // One fit for the entire path; never resize or move the floor during transitions.
+            let scale = min(0.35, 0.85 / extent.x, 1.05 / extent.y, 0.70 / extent.z)
+            entity.scale = SIMD3<Float>(repeating: scale)
+            entity.position = SIMD3<Float>(-(low.x + high.x) * scale / 2, -(low.y + high.y) * scale / 2,
+                                          -(low.z + high.z) * scale / 2)
+        }
+    }
+
+    #if DEBUG
+    private func writePostureProbeReceipt() {
+        guard ProcessInfo.processInfo.arguments.contains("--posture-probe") else { return }
+        let state = posture.phase.rawValue + ":" + activeMotion
+        if postureProbeHistory.last != state { postureProbeHistory.append(state) }
+        let receipt: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "history": postureProbeHistory, "phase": posture.phase.rawValue, "motion": activeMotion,
+                                    "wantsLying": posture.wantsLying, "time": motionPlayback?.time ?? 0]
+        if let encoded = try? JSONSerialization.data(withJSONObject: receipt) {
+            try? encoded.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PostureProbe.json"), options: .atomic)
+        }
+    }
+
+    private func startPostureProbe() {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--motion-smoke-test"), !arguments.contains("--posture-probe") {
+            wave()
+            let playback = motionPlayback
+            postureProbeTask = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                playback?.pause()
+                playback?.time = (motionDurations["wave"] ?? 3) * 0.4
+            }
+            return
+        }
+        guard arguments.contains("--posture-probe"), canChangePosture else { return }
+        requestPosture(lying: true)
+        writePostureProbeReceipt()
+        postureProbeTask = Task { [weak self] in
+            if let marker = arguments.first(where: { $0.hasPrefix("--posture-probe-phase=") }),
+               let phase = Double(marker.dropFirst("--posture-probe-phase=".count)) {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled, let self else { return }
+                self.motionPlayback?.pause()
+                self.motionPlayback?.time = (self.motionDurations["lie_down"] ?? 7) * min(0.99, max(0, phase))
+                self.writePostureProbeReceipt()
+            } else if let command = arguments.first(where: { $0.hasPrefix("--posture-probe-gesture=") }) {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                let name = String(command.dropFirst("--posture-probe-gesture=".count))
+                self?.gesture(name, label: name)
+            } else if arguments.contains("--posture-probe-reverse") {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.requestPosture(lying: false)
+            } else if arguments.contains("--posture-probe-roundtrip") || arguments.contains(where: { $0.hasPrefix("--posture-probe-getup-phase=") }) {
+                while !Task.isCancelled, let self, self.posture.phase != .sideLying {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.requestPosture(lying: false)
+                if let marker = arguments.first(where: { $0.hasPrefix("--posture-probe-getup-phase=") }),
+                   let phase = Double(marker.dropFirst("--posture-probe-getup-phase=".count)) {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled, let self else { return }
+                    self.motionPlayback?.pause()
+                    self.motionPlayback?.time = (self.motionDurations["get_up"] ?? 7.7) * min(0.99, max(0, phase))
+                    self.writePostureProbeReceipt()
+                }
+            }
+        }
+    }
+    #endif
+
     func advanceFace() {
+        if let playback = motionPlayback, activeMotion != "idle", activeMotion != "side_lying", playback.isComplete {
+            finishMotion(playback)
+        }
         let now = Date()
         if now >= nextBlink && blinkStart == nil { blinkStart = now }
         var blink: Float = 0
