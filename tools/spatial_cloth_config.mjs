@@ -40,6 +40,12 @@ export function spatialClothConfig(definitions, indices, dynamicIndices, seams, 
   });
   return {version: 1, sourceSHA256: sourceHash, floor,
     joints: ordered.map(index => ({name: pathFor(index), bone: definitions[index].name, parent: ordinal.get(definitions[index].parent) ?? -1})),
+    // Only the verified Hsin trial rig supplies chest rotation grants; Aemeath stays excluded.
+    chestSprings: grants.length === 10 ? ['左胸', '右胸'].flatMap(name => {
+      const joint = names.get(name), tip = names.get(name + '先');
+      return ordinal.has(joint) && tip !== undefined && definitions[tip].parent === joint
+        ? [{joint: ordinal.get(joint), tip: definitions[tip].position, limitAngle: .22}] : [];
+    }) : [],
     nodes, links, colliders, postGrants: grants.filter(grant => ordinal.has(grant.joint) && ordinal.has(grant.source))
       .map(grant => ({joint: ordinal.get(grant.joint), source: ordinal.get(grant.source), ratio: grant.ratio})),
     limitations: ['Bone PBD with approximate body capsules and model floor; no triangle/self/real-room collision']};

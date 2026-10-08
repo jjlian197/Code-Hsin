@@ -87,3 +87,9 @@ node --loader ./tools/node_three_loader.mjs tools/bake_hsin_interactions.mjs .ru
 二阶段同理，使用对应 PMX、`second.json` 校准及必要的 `--shared-textures`。部署复制 `Hsin.usdz`、`provenance.json` 及全部 `Motions`（含 `physics.json`）。不要只替换模型或只复制动作。爱弥斯完整转换调用 `tools/prepare_aemeath_interactions.py --realtime-cloth`；旧离线模式拒绝覆盖已有实时配置，避免残留配置与错误动画叠加。
 
 `physics.json` 包含经过校验的骨骼路径、粒子／链／接缝、模型地面、身体胶囊和十根胸辅助骨的旋转付与。运行时在 [Apple 骨架更新完成事件](https://developer.apple.com/documentation/realitykit/animationevents/skeletalposeupdatecomplete) 后读取动画姿态，经固定 120 Hz 骨骼 PBD 求解后写回 `SkeletalPosesComponent`。这是实时骨骼衣发，身体由既有动画控制；不等同于 MMD Bullet、逐顶点布料、自碰撞或真实房间碰撞。AVP 外观、穿插和性能仍需验收。
+
+## Build 12 胸骨动态与渲染写回
+
+- 两份试验 PMX／全部 USDZ 动作与 Build 11 相同，原文件只读。重新准备资源时，公共 `spatial_cloth_config.mjs` 会为已验证心辅助骨配置生成两条 `chestSprings`；末端偏移来自对应左右“胸先”骨，限幅 0.22 rad。旧的 version 1 衣发配置允许缺少该字段；爱弥斯字段为空。
+- 胸骨动态单独求解，不混入衣发粒子；旋转写回后再执行十根辅助骨付与。衣发与胸部共用设置开关。没有迁移完整 Bullet 刚体／关节参数。
+- 默认 USD 动画骨架直接写 `ModelEntity.jointTransforms`；仅姿态组件求解计数不能作为可见蒙皮证据。开发探针核对默认渲染关节调色板回读，并用真实资源蒙皮权重计算变形范围；AVP 外观验收单独记录。

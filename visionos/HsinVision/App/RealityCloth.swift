@@ -16,12 +16,22 @@ final class RealityCloth {
     private(set) var lastBase: [ClothTransform] = []
     private(set) var lastSolved: [ClothTransform] = []
     var snapshot: [String: Any] {
-        ["sourceSHA256": solver.configuration.sourceSHA256, "frames": frames, "steps": solver.steps, "particles": solver.configuration.nodes.count,
-         "links": solver.configuration.links.count, "postGrants": solver.configuration.postGrants.count,
+        var receipt: [String: Any] = ["sourceSHA256": solver.configuration.sourceSHA256, "frames": frames, "steps": solver.steps, "particles": solver.configuration.nodes.count,
+         "links": solver.configuration.links.count, "postGrants": solver.configuration.postGrants.count, "chestSprings": solver.configuration.chestSprings?.count ?? 0, "maximumChestAngle": solver.maximumChestAngle,
          "maximumDisplacement": solver.maximumDisplacement, "minimumFreeY": solver.minimumFreeY,
          "floor": solver.configuration.floor, "collisionCorrections": solver.collisionCorrections,
          "milliseconds": lastMilliseconds, "maxMilliseconds": maximumMilliseconds, "enabled": wasEnabled,
          "pose": poseID, "status": status]
+        #if DEBUG
+        if let model = rig as? ModelEntity, model.jointTransforms.count == lastSolved.count, !lastSolved.isEmpty {
+            receipt["renderRigReadbackMaximumError"] = zip(model.jointTransforms, lastSolved).map {
+                max(simd_distance($0.translation, $1.position), min(simd_length($0.rotation.vector - $1.rotation.vector), simd_length($0.rotation.vector + $1.rotation.vector)))
+            }.max() ?? 0
+            receipt["basePose"] = lastBase.map { [$0.position.x, $0.position.y, $0.position.z, $0.rotation.vector.x, $0.rotation.vector.y, $0.rotation.vector.z, $0.rotation.vector.w] }
+            receipt["solvedPose"] = lastSolved.map { [$0.position.x, $0.position.y, $0.position.z, $0.rotation.vector.x, $0.rotation.vector.y, $0.rotation.vector.z, $0.rotation.vector.w] }
+        }
+        #endif
+        return receipt
     }
     init?(character: Entity, configuration: ClothConfiguration) {
         guard configuration.valid else { return nil }
@@ -57,13 +67,23 @@ final class RealityCloth {
         for index in corrected.indices {
             pose.jointTransforms[index] = Transform(scale: corrected[index].scale, rotation: corrected[index].rotation, translation: corrected[index].position)
         }
-        component.poses.set(pose); rig.components.set(component)
+        var writesDefaultPalette = pose.id.isEmpty
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--physics-probe-component-write") { writesDefaultPalette = false }
+        #endif
+        if let model = rig as? ModelEntity, writesDefaultPalette {
+            // Imported USD clips animate the ModelEntity default joint palette. Write
+            // that palette directly so the rendered skin and the exposed pose agree.
+            model.jointTransforms = Array(pose.jointTransforms)
+        } else {
+            component.poses.set(pose); rig.components.set(component)
+        }
         frames += 1
         lastMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1000
         maximumMilliseconds = max(maximumMilliseconds, lastMilliseconds)
         #if DEBUG
         lastBase = base; lastSolved = corrected
         #endif
-        status = "实时衣发已开启"
+        status = (solver.configuration.chestSprings ?? []).isEmpty ? "实时衣发已开启" : "实时衣发与胸部动态已开启"
     }
 }

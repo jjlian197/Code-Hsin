@@ -91,8 +91,8 @@ struct CompanionView: View {
                 Button("打断回复", systemImage: "hand.raised") { companion.interruptVoiceTurn() }
             }
             Button("聊天", systemImage: "text.bubble") { companion.noteInteraction(); showChat.toggle() }
-            Button("陪伴", systemImage: "heart") { companion.noteInteraction(wake: false); showCare.toggle(); if showCare { showConnection = false } }
-            Button("设置", systemImage: "gearshape") { companion.noteInteraction(wake: false); showConnection.toggle(); if showConnection { showCare = false } }
+            Button("陪伴", systemImage: "heart") { companion.noteInteraction(); showCare.toggle(); if showCare { showConnection = false } }
+            Button("设置", systemImage: "gearshape") { companion.noteInteraction(); showConnection.toggle(); if showConnection { showCare = false } }
         }
     }
 
@@ -182,7 +182,7 @@ struct CompanionView: View {
             DisclosureGroup("互动设置") {
                 Toggle("待机呼吸", isOn: $companion.breathing)
                 Toggle("随机环顾", isOn: $companion.randomLook).disabled(!companion.canLook)
-                Toggle("实时衣发物理", isOn: $companion.clothPhysics)
+                Toggle("实时衣发／胸部物理", isOn: $companion.clothPhysics)
                 Text(companion.physicsStatus).font(.caption2).foregroundStyle(.secondary)
                 Toggle("触摸反馈", isOn: $companion.touchEnabled)
                 Toggle("闲置十分钟后休息", isOn: $companion.automaticRest).disabled(!companion.canChangePosture)

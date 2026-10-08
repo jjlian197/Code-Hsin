@@ -52,6 +52,38 @@ struct BoneClothChecks {
             precondition(contact.minimumFreeY >= 0.008 - 1e-5)
         }
         precondition(contact.collisionCorrections > 0)
+        let chestConfiguration = ClothConfiguration(chestSprings: [.init(joint: 4, tip: [0, 0, 0.12], limitAngle: 0.22)],
+            version: configuration.version, sourceSHA256: configuration.sourceSHA256, floor: configuration.floor,
+            joints: configuration.joints + [.init(name: "body/chest", bone: "左胸", parent: 0), .init(name: "body/chest/tip", bone: "左胸先", parent: 4)],
+            nodes: configuration.nodes, links: configuration.links, colliders: configuration.colliders,
+            postGrants: [.init(joint: 3, source: 4, ratio: 0.4)])
+        precondition(chestConfiguration.valid)
+        for rate in [30, 60, 120] {
+            var solver = BoneCloth(configuration: chestConfiguration)
+            var peak: Float = 0
+            func chestPose(_ seconds: Float) -> [ClothTransform] {
+                var joints = pose(0)
+                joints[0].position.y += sin(seconds * 12) * 0.03
+                return joints + [.init(position: SIMD3(0.03, 0.1, 0), rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)),
+                                 .init(position: SIMD3(0, 0, 0.12), rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))]
+            }
+            for frame in 0..<(rate * 4) {
+                let base = chestPose(Float(frame) / Float(rate))
+                let solved = solver.update(base, delta: 1 / Double(rate))
+                precondition(solved.allSatisfy(\.finite) && solved[0].position == base[0].position)
+                precondition(solved[4].position == base[4].position && solved[4].scale == base[4].scale)
+                precondition(solver.maximumChestAngle <= 0.2201)
+                let expected = simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), solved[4].rotation, 0.4)
+                precondition(simd_length(solved[3].rotation.vector - expected.vector) < 1e-5)
+                peak = max(peak, solver.maximumChestAngle)
+            }
+            precondition(peak > 0.03)
+            for _ in 0..<(rate * 5) { _ = solver.update(chestPose(0), delta: 1 / Double(rate)) }
+            precondition(solver.maximumChestAngle < 0.005)
+            solver.reset(); _ = solver.update(chestPose(0), delta: 1 / Double(rate))
+            precondition(solver.maximumChestAngle < 0.001)
+            print("Chest acceleration, angle limit, auxiliary follow, settling and reset passed at \(rate) Hz; peak \(peak)")
+        }
         if CommandLine.arguments.count > 1 {
             for path in CommandLine.arguments.dropFirst() {
                 let bytes = try Data(contentsOf: URL(fileURLWithPath: path))

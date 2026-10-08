@@ -6,6 +6,8 @@ struct ClothConfiguration: Codable {
     struct Node: Codable { let joint: Int; let parent: Int; let limit: Float; let radius: Float }
     struct Link: Codable { let a: Int; let b: Int; let stiffness: Float }
     struct Collider: Codable { let a: Int; let b: Int; let radius: Float }
+    struct ChestSpring: Codable { let joint: Int; let tip: [Float]; let limitAngle: Float }
+    var chestSprings: [ChestSpring]? = nil
     struct Grant: Codable { let joint: Int; let source: Int; let ratio: Float }
     let version: Int
     let sourceSHA256: String
@@ -24,6 +26,12 @@ struct ClothConfiguration: Codable {
         && nodes.enumerated().allSatisfy { joints.indices.contains($0.element.joint) && $0.element.parent >= -1 && $0.element.parent < $0.offset && $0.element.limit.isFinite && (0.001...0.5).contains($0.element.limit) && $0.element.radius.isFinite && (0.001...0.05).contains($0.element.radius) }
         && links.count < 5000 && links.allSatisfy { nodes.indices.contains($0.a) && nodes.indices.contains($0.b) && $0.a != $0.b && $0.stiffness.isFinite && (0...1).contains($0.stiffness) }
         && colliders.count <= 20 && colliders.allSatisfy { joints.indices.contains($0.a) && joints.indices.contains($0.b) && $0.radius.isFinite && (0.001...0.5).contains($0.radius) }
+        && (chestSprings ?? []).count <= 2 && (chestSprings ?? []).allSatisfy {
+            joints.indices.contains($0.joint) && ["左胸", "右胸"].contains(joints[$0.joint].bone)
+            && $0.tip.count == 3 && $0.tip.allSatisfy(\.isFinite)
+            && (0.02...0.3).contains(simd_length(SIMD3<Float>($0.tip[0], $0.tip[1], $0.tip[2])))
+            && $0.limitAngle.isFinite && (0.01...0.3).contains($0.limitAngle)
+        }
         && postGrants.count <= 50 && postGrants.allSatisfy { joints.indices.contains($0.joint) && joints.indices.contains($0.source) && $0.joint != $0.source && $0.ratio.isFinite && (0...1).contains($0.ratio) }
     }
 }
@@ -47,6 +55,10 @@ struct BoneCloth {
     private var points: [SIMD3<Float>] = []
     private var previous: [SIMD3<Float>] = []
     private var lastTargets: [SIMD3<Float>] = []
+    private var chestPoints: [SIMD3<Float>] = []
+    private var chestPrevious: [SIMD3<Float>] = []
+    private var chestTargets: [SIMD3<Float>] = []
+    private(set) var maximumChestAngle: Float = 0
     private var accumulator = 0.0
     private var age = 0.0
     private(set) var steps = 0
@@ -67,7 +79,7 @@ struct BoneCloth {
         }
         nodeForJoint = mapping; children = descendants
     }
-    mutating func reset() { points = []; previous = []; lastTargets = []; accumulator = 0; age = 0 }
+    mutating func reset() { points = []; previous = []; lastTargets = []; accumulator = 0; age = 0; chestPoints = []; chestPrevious = []; chestTargets = []; maximumChestAngle = 0 }
     private func worlds(_ local: [ClothTransform]) -> [ClothTransform] {
         var transforms: [ClothTransform] = []; transforms.reserveCapacity(local.count)
         for index in local.indices {
@@ -113,14 +125,29 @@ struct BoneCloth {
         let body = worlds(base), targets = configuration.nodes.map { body[$0.joint].position }
         // Resume/loading stalls reset momentum; bounded fixed steps avoid giant impulses or catch-up loops.
         if points.count != targets.count || delta > 0.2 || zip(targets, lastTargets).contains(where: { simd_distance($0, $1) > 0.3 }) {
+            reset()
             points = targets; previous = targets; lastTargets = targets; accumulator = 0; age = 0
         }
         for index in targets.indices {
-            let shift = (targets[index] - lastTargets[index]) * 0.92
+            // Free particles retain world-space inertia; following 92% of every animated
+            // target shift erased nearly all running acceleration before the solver saw it.
+            let shift = (targets[index] - lastTargets[index]) * 0.65
             points[index] += shift; previous[index] += shift
             if configuration.nodes[index].parent < 0 { points[index] = targets[index]; previous[index] = targets[index] }
         }
         lastTargets = targets
+        let springs = configuration.chestSprings ?? []
+        let nextChestTargets = springs.map { spring in
+            body[spring.joint].child(ClothTransform(position: SIMD3(spring.tip[0], spring.tip[1], spring.tip[2]), rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))).position
+        }
+        if chestPoints.count != springs.count {
+            chestPoints = nextChestTargets; chestPrevious = nextChestTargets; chestTargets = nextChestTargets
+        }
+        for index in springs.indices {
+            let shift = (nextChestTargets[index] - chestTargets[index]) * 0.4
+            chestPoints[index] += shift; chestPrevious[index] += shift
+        }
+        chestTargets = nextChestTargets
         accumulator += min(delta, 1.0 / 15)
         let timestep = 1.0 / 120
         let lengths = configuration.links.map { simd_distance(targets[$0.a], targets[$0.b]) }
@@ -132,6 +159,18 @@ struct BoneCloth {
                 previous[index] = points[index]
                 points[index] += velocity + SIMD3<Float>(0, -2.2 * Float(timestep * timestep), 0)
                 points[index] += (targets[index] - points[index]) * shape
+            }
+            // Two virtual chest tips retain acceleration, with a restoring spring and damping.
+            // Rotations are applied to chest bones before the trial's auxiliary rotation grants.
+            for index in springs.indices {
+                let velocity = (chestPoints[index] - chestPrevious[index]) * Float(exp(-8.5 * timestep))
+                chestPrevious[index] = chestPoints[index]
+                chestPoints[index] += velocity + (nextChestTargets[index] - chestPoints[index]) * Float(120 * timestep * timestep)
+                let origin = body[springs[index].joint].position
+                let direction = chestPoints[index] - origin
+                if simd_length_squared(direction) > 1e-9 {
+                    chestPoints[index] = origin + simd_normalize(direction) * simd_distance(origin, nextChestTargets[index])
+                }
             }
             for iteration in 0..<4 {
                 for (slot, link) in configuration.links.enumerated() {
@@ -172,6 +211,19 @@ struct BoneCloth {
                     corrected[joint].rotation = simd_normalize(desired[parent].rotation.inverse * desired[joint].rotation)
                 } else { corrected[joint] = desired[joint] }
             } else { desired[joint] = parent >= 0 ? desired[parent].child(corrected[joint]) : corrected[joint] }
+        }
+        maximumChestAngle = 0
+        for (index, spring) in springs.enumerated() {
+            let joint = spring.joint, parent = configuration.joints[joint].parent
+            let from = nextChestTargets[index] - body[joint].position, to = chestPoints[index] - body[joint].position
+            guard simd_length_squared(from) > 1e-9, simd_length_squared(to) > 1e-9 else { continue }
+            var turn = simd_quatf(from: simd_normalize(from), to: simd_normalize(to))
+            let angle = abs(turn.angle)
+            if angle > spring.limitAngle { turn = simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), turn, spring.limitAngle / angle) }
+            turn = simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), turn, blend)
+            maximumChestAngle = max(maximumChestAngle, abs(turn.angle))
+            let rotation = simd_normalize(turn * body[joint].rotation)
+            corrected[joint].rotation = parent >= 0 ? simd_normalize(body[parent].rotation.inverse * rotation) : rotation
         }
         // The trial auxiliary rig inherits the current chest AFTER secondary-motion writes.
         // Only verified rotation grants are represented; generic PMX IK/Grant is not implied.

@@ -80,6 +80,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var physicsProbeFrames = 0
     private var physicsProbeTask: Task<Void, Never>?
     private var physicsToggleStates: [[String: Any]] = []
+    private var lyingInteractionChecks: [String] = []
     #endif
     private var activeMotion = "idle"
     var wantsLying: Bool { pendingPosture ?? posture.wantsLying }
@@ -114,7 +115,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var manualExpressionUntil = 0.0
     @Published var expression = "normal"
     @Published var breathing = UserDefaults.standard.object(forKey: "breathing") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(breathing, forKey: "breathing"); if modelReady && isIdle { _ = playMotion("idle") } }
+        didSet { UserDefaults.standard.set(breathing, forKey: "breathing"); if modelReady && isIdle && posture.phase == .standing { _ = playMotion("idle") } }
     }
     @Published var randomLook = UserDefaults.standard.object(forKey: "randomLook") as? Bool ?? true {
         didSet { UserDefaults.standard.set(randomLook, forKey: "randomLook"); if !randomLook { behavior.look("center", at: uptime) } }
@@ -266,6 +267,9 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let directory = resourceDirectory
         modelReady = false
         physicsSubscription?.cancel(); physicsSubscription = nil; realtimeCloth = nil
+        #if DEBUG
+        physicsProbeTask?.cancel(); physicsProbeTask = nil; physicsToggleStates = []
+        #endif
         physicsStatus = "实时衣发正在加载"
         resetPosture()
         motionRoot = nil
@@ -349,9 +353,18 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 realtimeCloth = RealityCloth(character: loaded, configuration: configuration)
                 physicsStatus = realtimeCloth == nil ? "衣发骨架或配置不匹配，未启用物理" : "实时衣发已就绪"
                 physicsSubscription = content.subscribe(to: AnimationEvents.SkeletalPoseUpdateComplete.self) { [weak self] event in
-                    Task { @MainActor [weak self] in
-                        guard let self, requestedGeneration == self.modelGeneration else { return }
-                        self.advancePhysics(delta: event.deltaTime)
+                    // Defer only off-main events: enqueueing every pose write can miss the
+                    // current animation/render phase. The main-thread path writes synchronously.
+                    if Thread.isMainThread {
+                        MainActor.assumeIsolated {
+                            guard let self, requestedGeneration == self.modelGeneration else { return }
+                            self.advancePhysics(delta: event.deltaTime)
+                        }
+                    } else {
+                        Task { @MainActor [weak self] in
+                            guard let self, requestedGeneration == self.modelGeneration else { return }
+                            self.advancePhysics(delta: event.deltaTime)
+                        }
                     }
                 }
             } else { physicsStatus = "当前资源未包含实时衣发配置" }
@@ -388,9 +401,11 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     guard !Task.isCancelled, let self, requestedGeneration == self.modelGeneration else { return }
                     self.clothPhysics = false
                     try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, requestedGeneration == self.modelGeneration else { return }
                     self.physicsToggleStates.append(self.realtimeCloth?.snapshot ?? [:])
                     self.clothPhysics = true
                     try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled, requestedGeneration == self.modelGeneration else { return }
                     self.physicsToggleStates.append(self.realtimeCloth?.snapshot ?? [:])
                 }
             }
@@ -443,7 +458,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func gesture(_ name: String, label: String) {
         guard modelReady, motions[name] != nil else { return }
-        noteInteraction(wake: false)
+        noteInteraction()
         if posture.phase != .standing {
             pendingGesture = (name, label)
             requestPosture(lying: false, preserveGesture: true)
@@ -521,7 +536,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         #if DEBUG
         postureProbeTask?.cancel()
         postureProbeTask = nil
-        postureProbeHistory = []
+        postureProbeHistory = []; lyingInteractionChecks = []
         interactionProbeHistory = []
         #endif
     }
@@ -557,7 +572,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let state = posture.phase.rawValue + ":" + activeMotion
         if postureProbeHistory.last != state { postureProbeHistory.append(state) }
         let receipt: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "history": postureProbeHistory, "phase": posture.phase.rawValue, "motion": activeMotion,
-                                    "wantsLying": posture.wantsLying, "time": motionPlayback?.time ?? 0]
+                                    "wantsLying": posture.wantsLying, "lyingInteractionChecks": lyingInteractionChecks, "time": motionPlayback?.time ?? 0]
         if let encoded = try? JSONSerialization.data(withJSONObject: receipt) {
             try? encoded.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("PostureProbe.json"), options: .atomic)
@@ -622,7 +637,10 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             return
         }
         guard arguments.contains("--posture-probe"), canChangePosture else { return }
-        requestPosture(lying: true)
+        if arguments.contains("--posture-probe-keep-lying") {
+            _ = behavior.shouldRest(at: uptime + 601, enabled: true, visible: true, ready: true, busy: false, idle: true, standing: true)
+            requestPosture(lying: true, preserveGesture: true)
+        } else { requestPosture(lying: true) }
         writePostureProbeReceipt()
         postureProbeTask = Task { [weak self] in
             if let marker = arguments.first(where: { $0.hasPrefix("--posture-probe-phase=") }),
@@ -637,6 +655,22 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 guard !Task.isCancelled else { return }
                 let name = String(command.dropFirst("--posture-probe-gesture=".count))
                 self?.gesture(name, label: name)
+            } else if arguments.contains("--posture-probe-keep-lying") {
+                while !Task.isCancelled, let self, self.posture.phase != .sideLying {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                guard !Task.isCancelled, let self else { return }
+                if let target = self.touchTargets.first { self.touch(target) }
+                self.lyingInteractionChecks.append("touch:" + self.posture.phase.rawValue)
+                for source in ["chat_panel", "text_input", "microphone_activity", "transcript"] {
+                    self.noteInteraction()
+                    self.lyingInteractionChecks.append(source + ":" + self.posture.phase.rawValue)
+                }
+                self.setExpression("happy"); self.look("look_right")
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                self.lyingInteractionChecks.append("settled:" + self.posture.phase.rawValue)
+                self.writePostureProbeReceipt()
             } else if arguments.contains("--posture-probe-reverse") {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
@@ -756,34 +790,33 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func setSceneVisible(_ visible: Bool) {
         sceneVisible = visible
         behavior.interact(at: uptime)
-        if !visible { stopSpeech() }
+        if !visible { realtimeCloth?.reset(); stopSpeech() }
     }
 
-    func noteInteraction(wake: Bool = true) {
+    func noteInteraction() {
+        // Chat, speech and touch renew activity without changing the requested posture.
+        // Only explicit posture/full-body gesture commands may leave a resting pose.
         behavior.interact(at: uptime)
-        if wake, posture.phase != .standing { requestPosture(lying: false) }
     }
 
     func setExpression(_ name: String) {
         guard availableExpressions.contains(name) else { return }
-        noteInteraction(wake: false)
+        noteInteraction()
         expression = name
         manualExpressionUntil = uptime + 45
     }
 
     func look(_ direction: String) {
         guard canLook else { return }
-        noteInteraction(wake: false)
+        noteInteraction()
         behavior.look(direction, at: uptime)
     }
 
     func touch(_ entity: Entity) {
         guard touchEnabled, modelReady, entity.name.hasPrefix("HsinTouch_") else { return }
         let part = String(entity.name.dropFirst("HsinTouch_".count))
-        let wasResting = behavior.restRequested
         guard behavior.touch(part, at: uptime) else { return }
         care.interact("touch", part: part, uptime: uptime)
-        if wasResting { requestPosture(lying: false); return }
         // A touch never forces a manually selected full-body pose to exit.
         guard posture.phase == .standing, !busy, activeMotion != "treadmill_running" else { return }
         let motion = part == "head" ? "finger_heart" : part == "chest" ? "crossed_arms" : part.contains("hand") ? "peace" : "wave"
