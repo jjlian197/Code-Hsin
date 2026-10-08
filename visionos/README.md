@@ -1,6 +1,6 @@
 # 心 · Hsin Spatial（visionOS 开发原型）
 
-2026-10-08：**AVP 保持 Build 5；Build 6 面部修复已完成，Build 7 新增 Hsin 侧躺／起身；Build 8 补聊天历史与阶段 3 互动，本轮按用户要求不安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
+2026-10-08：**AVP 已按用户授权覆盖安装 Build 8 Release（0.1），原有连接／角色设置保留；外观与真实互动待验收**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
 
 当前主线为阶段 1–3 的实装核查与补缺；面部表现方面，Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
 
@@ -97,7 +97,7 @@ xcrun simctl launch <模拟器ID> com.hsin.spatial \
 
 跑步复用匹配形态的 macOS 校准，半速约 15.73 秒，首尾完整站姿衔接；实际结束后恢复呼吸待机，途中排队姿态／手势。转换扩展固定路径取景。视线目前为手动方向／随机环顾，没有头显视线跟随；跑步没有实时衣发物理，爱弥斯未经校准的全身动作不开放。
 
-双形态原生控制器的跑步复位、自动休息／程序触摸唤醒检查通过，未开启麦克风。Debug 模拟器及 Release 真机目标无签名构建通过，AVP 未更新；完整外观和真实空间点击仍由用户验收。
+双形态原生控制器的跑步复位、自动休息／程序触摸唤醒检查通过，未开启麦克风。Debug 模拟器及 Release 真机目标构建通过；按用户授权已完成 Release 签名、覆盖安装，设备列表确认 Build 8。原有连接／角色设置保留；本次远程启动超时，用户需在 AVP 手动打开 Hsin Spatial，启动画面尚未确认。完整外观和真实空间点击仍由用户验收。
 
 ```sh
 xcrun simctl launch <模拟器ID> com.hsin.spatial \
