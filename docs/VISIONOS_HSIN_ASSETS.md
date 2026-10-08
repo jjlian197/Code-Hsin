@@ -41,3 +41,25 @@ node --loader ./tools/node_three_loader.mjs tools/bake_hsin_postures.mjs .runtim
 `src/assets/motions/{first,second}.json` 为本机私有校准资源，不提交 Git。输出九个完整骨架片段，新增独立躺下、起身与稳定侧躺；所有动作恢复全套骨骼，PMX Grant 在转换侧求值，衣发复用 PoseCloth 离线采样。将各输出 `Hsin.usdz`、`Motions/*.usdz`、`manifest.json` 和新增 `posture.json` 复制到对应 Characters 目录。`posture.json` 记录校准文件哈希、PMX 哈希、固定模型空间地面、整条路径包围盒与物理限制；没有此文件的旧资源仍可加载，但不能获得完整路径取景。
 
 离线采样不等价于实时物理，侧躺使用稳定定格；桌面逐顶点落地投影尚未迁移。原 PMX、贴图、校准 JSON 和参考模型均保持只读。
+
+## Build 8：完整互动资源准备
+
+统一工具依次执行几何、校准姿态、互动采样和 USDZ 导出，只复制模型、动作与 JSON 运行资源到忽略目录，不复制中间层或带私人路径的来源报告：
+
+```sh
+.venv/bin/python -m tools.prepare_hsin_visionos \
+  --model /path/心.pmx --transitions src/assets/motions/first.json \
+  --workspace .runtime/hsin-spatial/build8-first \
+  --destination visionos/HsinVision/Resources/Characters/HsinFirst
+.venv/bin/python -m tools.prepare_hsin_visionos \
+  --model /path/心_二阶段.pmx --transitions src/assets/motions/second.json \
+  --workspace .runtime/hsin-spatial/build8-second \
+  --destination visionos/HsinVision/Resources/Characters/HsinSecond \
+  --shared-textures /path/心_一阶段
+```
+
+`bake_hsin_interactions.mjs` 将九片段扩展为十一片段：待机呼吸与半速跑步，使用桌面呼吸参数及按 PMX 哈希选择的双形态跑步 JSON。Grant 求值、全身端点与跑步包围盒均在转换侧处理；跑步原校准文件不含 PMX 哈希，转换器按已验证哈希选择对应形态文件，并另记文件 SHA-256。不宣称任意模型兼容。
+
+`Motions/behavior.json` 包含可用表达与每帧五个触摸区域位置；表达取自 macOS `expressions`，映射到统一的原生通道。两形态当前均支持 12 种表达及四向视线；相关非零面部网格一并合并，保留各材质。触摸采用动画骨骼球形区域近似，尚非实际蒙皮三角形命中。
+
+转换拒绝覆盖输入采样或原模型。打包后逐个检查资产引用确实存在于 USDZ 中；两形态分别核对 47／45 个贴图引用。这只证明资源引用完整，不证明透明材质、表情／跑步或 AVP 外观已验收。

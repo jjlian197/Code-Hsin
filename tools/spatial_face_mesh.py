@@ -4,7 +4,14 @@ from __future__ import annotations
 from typing import Any
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdSkel
 
-FACE_CHANNELS = frozenset(('blink', 'smile', 'a', 'i', 'u', 'e', 'o'))
+FACE_NAMES = {'まばたき': 'blink', '笑い': 'smile', 'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o',
+              'にこり': 'happy', '口角上げ左': 'corner_left', '口角上げ右': 'corner_right',
+              '困る': 'troubled', '悲しい目': 'sad', '怒り': 'angry', 'びっくり': 'surprised',
+              'ウィンク': 'wink', 'たれ目': 'relaxed', 'にこり２': 'happy2',
+              'FaceRed': 'red', '照れ': 'blush', '星目': 'star', '星目2': 'star2',
+              'はぁと': 'heart', 'はぁと2': 'heart2',
+              'Left': 'look_right', 'Right': 'look_left', 'Up': 'look_up', 'Down': 'look_down'}
+FACE_CHANNELS = frozenset(FACE_NAMES.values())
 VERTEX_ATTRIBUTES = ('points', 'normals', 'primvars:st', 'primvars:skel:jointIndices', 'primvars:skel:jointWeights')
 
 

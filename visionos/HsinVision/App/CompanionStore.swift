@@ -22,13 +22,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         didSet { if selectedForm != oldValue { changeCharacter(); UserDefaults.standard.set(selectedForm, forKey: "selectedForm") } }
     }
     @Published var chatProvider = "default" {
-        didSet { if chatProvider != oldValue { stopSpeech(); UserDefaults.standard.set(chatProvider, forKey: "chatProvider." + selectedCharacter) } }
+        didSet { if chatProvider != oldValue { stopSpeech(); selectHistory(); UserDefaults.standard.set(chatProvider, forKey: "chatProvider." + selectedCharacter) } }
     }
     var characterName: String { selectedCharacter == "hsin" ? "心" : "爱弥斯" }
     var resourceDirectory: String? { selectedCharacter == "hsin" ? "Characters/Hsin" + (selectedForm == "second" ? "Second" : "First") : nil }
     var modelResource: String { resourceDirectory ?? "Aemeath" }
     private var turnWatchdog: Task<Void, Never>?
-    @Published var sttProvider = "remote" { didSet { if sttProvider != oldValue { stopSpeech() } } }
+    @Published var sttProvider = UserDefaults.standard.string(forKey: "sttProvider") ?? "remote" { didSet { if sttProvider != oldValue { stopSpeech(); UserDefaults.standard.set(sttProvider, forKey: "sttProvider") } } }
     @Published private(set) var transcript = ""
     @Published private(set) var fullReply = ""
     @Published private(set) var isListening = false
@@ -47,7 +47,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var mouthProbeCounts: [String: Int] = [:]
     #endif
     private var pendingAudio: [AudioClip] = []
-    @Published var language = "zh" { didSet { if language != oldValue { stopSpeech() } } }
+    @Published var language = UserDefaults.standard.string(forKey: "language") ?? "zh" { didSet { if language != oldValue { stopSpeech(); UserDefaults.standard.set(language, forKey: "language") } } }
     @Published private(set) var status = "正在加载角色"
     @Published private(set) var caption = ""
     @Published private(set) var busy = false
@@ -62,12 +62,41 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     var canChangePosture: Bool { selectedCharacter == "hsin" && ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
     private var motionCompletion: EventSubscription?
     private var activeMotion = "idle"
+    var wantsLying: Bool { pendingPosture ?? posture.wantsLying }
+    @Published private var pendingPosture: Bool?
     private var pendingGesture: (name: String, label: String)?
     private var modelGeneration = 0
     #if DEBUG
     private var postureProbeTask: Task<Void, Never>?
     private var postureProbeHistory: [String] = []
+    private var interactionProbeHistory: [String] = []
     #endif
+    @Published private(set) var historyError = ""
+    @Published private(set) var conversationMessages: [ConversationMessage] = []
+    private var history = ConversationHistory(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Conversations"))
+    @Published var expression = "normal"
+    @Published var breathing = UserDefaults.standard.object(forKey: "breathing") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(breathing, forKey: "breathing"); if modelReady && isIdle { _ = playMotion("idle") } }
+    }
+    @Published var randomLook = UserDefaults.standard.object(forKey: "randomLook") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(randomLook, forKey: "randomLook"); if !randomLook { behavior.look("center", at: uptime) } }
+    }
+    @Published var touchEnabled = UserDefaults.standard.object(forKey: "touchEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(touchEnabled, forKey: "touchEnabled"); touchTargets.forEach { $0.isEnabled = touchEnabled } }
+    }
+    @Published var automaticRest = UserDefaults.standard.object(forKey: "automaticRest") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(automaticRest, forKey: "automaticRest"); noteInteraction() }
+    }
+    private var behavior = CompanionBehavior()
+    private var behaviorResources: SpatialBehaviorResources?
+    private var faceOverlay: [String: Float] = [:]
+    private var touchTargets: [Entity] = []
+    private var sceneVisible = true
+    private var uptime: Double { ProcessInfo.processInfo.systemUptime }
+    private var isIdle: Bool { ["idle", "idle_breathing"].contains(activeMotion) }
+    var canRun: Bool { modelReady && motions["treadmill_running"] != nil }
+    var availableExpressions: [String] { ["normal"] + (behaviorResources?.expressions.keys.map { $0 } ?? ["content"]).filter { $0 != "normal" }.sorted() }
+    var canLook: Bool { faces.contains { $0.components[BlendShapeWeightsComponent.self]?.weightSet.contains { $0.weightNames.contains("look_left") } == true } }
     private var speechTask: Task<Void, Never>?
     private var player: AVAudioPlayer?
     private var generation = 0
@@ -87,19 +116,25 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         gatewayToken = credential(for: gatewayURL) ?? ""
         importInstalledConnection()
         chatProvider = UserDefaults.standard.string(forKey: "chatProvider." + selectedCharacter) ?? "default"
+        selectHistory()
+        behavior.interact(at: uptime)
         recorder.onLimit = { [weak self] in self?.finishRecording() }
         recorder.onFailure = { [weak self] message in self?.stopSpeech(); self?.status = message }
     }
 
     private func changeCharacter() {
         modelGeneration += 1
+        modelReady = false
         stopSpeech()
         resetPosture()
-        modelReady = false
+        expression = "normal"
+        faceOverlay = [:]
+        behavior.interact(at: uptime)
         transcript = ""
         caption = ""
         fullReply = ""
         chatProvider = UserDefaults.standard.string(forKey: "chatProvider." + selectedCharacter) ?? "default"
+        selectHistory()
         status = "正在加载" + characterName
     }
 
@@ -186,6 +221,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         resetPosture()
         motionRoot = nil
         faces = []
+        touchTargets = []
+        behaviorResources = nil
         motions.removeAll()
         motionDurations.removeAll()
         guard let url = Bundle.main.url(forResource: selectedCharacter == "hsin" ? "Hsin" : "Aemeath", withExtension: "usdz", subdirectory: directory) else {
@@ -223,6 +260,19 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: [String: Any]] {
                 motionDurations = manifest.compactMapValues { $0["duration"] as? Double }
             }
+            if let behaviorURL = Bundle.main.url(forResource: "behavior", withExtension: "json", subdirectory: motionDirectory) {
+                let resources = try JSONDecoder().decode(SpatialBehaviorResources.self, from: Data(contentsOf: behaviorURL))
+                behaviorResources = resources
+                for region in resources.touchRegions {
+                    let target = Entity()
+                    target.name = "HsinTouch_" + region.name
+                    target.components.set(CollisionComponent(shapes: [.generateSphere(radius: region.radius)]))
+                    target.components.set(InputTargetComponent())
+                    target.isEnabled = touchEnabled
+                    loaded.addChild(target)
+                    touchTargets.append(target)
+                }
+            }
             for name in motionDurations.keys.sorted() {
                 if let clipURL = Bundle.main.url(forResource: name, withExtension: "usdz", subdirectory: motionDirectory) {
                     let clip = try await Entity(contentsOf: clipURL)
@@ -242,6 +292,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 return
             }
             modelReady = true
+            behavior.interact(at: uptime)
+            updateTouchTargets()
             status = characterName + "已就位；麦克风关闭"
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--speech-probe") {
@@ -267,6 +319,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 }
             }
             startPostureProbe()
+            startInteractionProbe()
             #endif
         } catch { status = "模型加载失败：\(error.localizedDescription)" }
     }
@@ -295,14 +348,15 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     @discardableResult
-    private func playMotion(_ name: String) -> Bool {
+    private func playMotion(_ requestedName: String) -> Bool {
+        let name = requestedName == "idle" && breathing && motions["idle_breathing"] != nil ? "idle_breathing" : requestedName
         guard let root = motionRoot, let animation = motions[name] else {
             status = "动作不可用：\(name)"
             return false
         }
         // Separately imported skeleton clips need the direct handoff used by the reference renderer.
         // Stopping the previous controller after starting the new one can restore the bind pose.
-        motionPlayback = root.playAnimation(["idle", "side_lying"].contains(name) ? animation.repeat() : animation,
+        motionPlayback = root.playAnimation(["idle", "idle_breathing", "side_lying"].contains(name) ? animation.repeat() : animation,
                                              transitionDuration: 0, startsPaused: false)
         activeMotion = name
         NSLog("[HsinVision] Motion playback %@", name)
@@ -313,9 +367,16 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func gesture(_ name: String, label: String) {
         guard modelReady, motions[name] != nil else { return }
+        noteInteraction(wake: false)
         if posture.phase != .standing {
             pendingGesture = (name, label)
             requestPosture(lying: false, preserveGesture: true)
+            return
+        }
+        if activeMotion == "treadmill_running" && name != activeMotion {
+            pendingPosture = nil
+            pendingGesture = (name, label)
+            if !busy && !isListening { status = "跑步结束后" + label }
             return
         }
         guard activeMotion != name, playMotion(name) else { return }
@@ -324,7 +385,12 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func requestPosture(lying: Bool, preserveGesture: Bool = false) {
         guard modelReady, canChangePosture else { return }
-        if !preserveGesture { pendingGesture = nil }
+        if !preserveGesture { pendingGesture = nil; behavior.interact(at: uptime) }
+        if !isIdle && posture.phase == .standing {
+            pendingPosture = lying
+            if !busy && !isListening { status = lying ? "当前动作结束后侧躺" : "当前动作结束后保持站立" }
+            return
+        }
         if let next = posture.request(lying: lying) { _ = playMotion(next) }
         updatePostureStatus()
         #if DEBUG
@@ -341,9 +407,16 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 pendingGesture = nil
                 gesture(queued.name, label: queued.label)
             } else { updatePostureStatus() }
-        } else if posture.phase == .standing, finished != "idle" {
+        } else if posture.phase == .standing, !isIdle {
             _ = playMotion("idle")
-            if !busy && !isListening { status = "动作完成" }
+            behavior.interact(at: uptime)
+            if let destination = pendingPosture {
+                pendingPosture = nil
+                requestPosture(lying: destination)
+            } else if let queued = pendingGesture {
+                pendingGesture = nil
+                gesture(queued.name, label: queued.label)
+            } else if !busy && !isListening { status = "动作完成" }
         }
         NSLog("[HsinVision] Motion completed %@, posture %@, next %@", finished, posture.phase.rawValue, activeMotion)
         #if DEBUG
@@ -368,10 +441,12 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         posture = PostureState()
         activeMotion = "idle"
         pendingGesture = nil
+        pendingPosture = nil
         #if DEBUG
         postureProbeTask?.cancel()
         postureProbeTask = nil
         postureProbeHistory = []
+        interactionProbeHistory = []
         #endif
     }
 
@@ -379,7 +454,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         struct Bounds: Decodable { let min: [Float]; let max: [Float] }
         let floor: Float
         let bounds: Bounds
-        func place(_ entity: Entity) {
+        @MainActor func place(_ entity: Entity) {
             guard bounds.min.count == 3, bounds.max.count == 3, floor.isFinite,
                   (bounds.min + bounds.max).allSatisfy({ $0.isFinite }) else { return }
             let low = SIMD3<Float>(bounds.min[0], bounds.min[1], bounds.min[2])
@@ -404,6 +479,42 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if let encoded = try? JSONSerialization.data(withJSONObject: receipt) {
             try? encoded.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("PostureProbe.json"), options: .atomic)
+        }
+    }
+
+    private func startInteractionProbe() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("--interaction-probe") else { return }
+        setExpression("happy")
+        look("look_right")
+        if arguments.contains("--interaction-probe-running") {
+            gesture("treadmill_running", label: "跑步")
+        } else if arguments.contains("--interaction-probe-rest") {
+            behavior.interact(at: uptime - 600)
+            postureProbeTask = Task { [weak self] in
+                while !Task.isCancelled, let self, self.posture.phase != .sideLying {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                guard !Task.isCancelled, let self, let target = self.touchTargets.first else { return }
+                self.touch(target)
+            }
+        }
+    }
+
+    private func writeInteractionProbeReceipt() {
+        guard ProcessInfo.processInfo.arguments.contains("--interaction-probe") else { return }
+        let state = posture.phase.rawValue + ":" + activeMotion
+        guard interactionProbeHistory.last != state else { return }
+        interactionProbeHistory.append(state)
+        let weights = faces.flatMap { $0.components[BlendShapeWeightsComponent.self]?.weightSet.map { entry in
+            Dictionary(uniqueKeysWithValues: zip(entry.weightNames, entry.weights))
+        } ?? [] }
+        let receipt: [String: Any] = ["pid": ProcessInfo.processInfo.processIdentifier, "history": interactionProbeHistory,
+            "phase": posture.phase.rawValue, "motion": activeMotion, "faceWeights": weights, "isListening": isListening,
+            "touchPositions": touchTargets.map { [$0.position.x, $0.position.y, $0.position.z] }]
+        if let encoded = try? JSONSerialization.data(withJSONObject: receipt) {
+            try? encoded.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("InteractionProbe.json"), options: .atomic)
         }
     }
 
@@ -461,9 +572,17 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     #endif
 
     func advanceFace() {
-        if let playback = motionPlayback, activeMotion != "idle", activeMotion != "side_lying", playback.isComplete {
+        if let playback = motionPlayback, !isIdle, activeMotion != "side_lying", playback.isComplete {
             finishMotion(playback)
         }
+        updateTouchTargets()
+        let monotonic = uptime
+        if behavior.shouldRest(at: monotonic, enabled: automaticRest, visible: sceneVisible, ready: modelReady && canChangePosture,
+                               busy: busy, idle: isIdle, standing: posture.phase == .standing) {
+            // A timer requests the transition once; actual animation completion owns its advancement.
+            requestPosture(lying: true, preserveGesture: true)
+        }
+        behavior.tickLook(at: monotonic, enabled: randomLook && canLook, idle: isIdle && !busy && posture.phase == .standing)
         let now = Date()
         if now >= nextBlink && blinkStart == nil { blinkStart = now }
         var blink: Float = 0
@@ -499,16 +618,91 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             blink = 0
         }
         #endif
+        var overlay = behaviorResources?.expressions[expression] ?? (expression == "content" ? ["smile": 0.65] : [:])
+        if monotonic < behavior.touchUntil {
+            for (name, value) in behaviorResources?.expressions[behavior.touchPart == "chest" ? "blush" : "happy"] ?? ["smile": 0.5] {
+                overlay[name] = max(overlay[name] ?? 0, value)
+            }
+        }
+        for (name, value) in behavior.gaze { overlay[name] = value }
+        for name in Set(faceOverlay.keys).union(overlay.keys) {
+            faceOverlay[name, default: 0] += ((overlay[name] ?? 0) - (faceOverlay[name] ?? 0)) * Float(1 - exp(-max(0, min(elapsed, 0.1)) * 10))
+        }
         for face in faces {
             guard var component = face.components[BlendShapeWeightsComponent.self] else { continue }
             for entry in component.weightSet {
                 var updated = entry
                 for (index, name) in entry.weightNames.enumerated() {
-                    updated.weights[index] = name == "blink" ? blink * (selectedCharacter == "hsin" ? 1 : 1.12) : mouthWeights[name] ?? 0
+                    let manual = faceOverlay[name] ?? 0
+                    if name == "blink" {
+                        updated.weights[index] = max(manual, (expression == "wink" ? 0 : blink) * (selectedCharacter == "hsin" ? 1 : 1.12))
+                    } else if SpeechMouthTimeline.vowels.contains(name), player != nil {
+                        updated.weights[index] = mouthWeights[name] ?? 0
+                    } else { updated.weights[index] = max(manual, mouthWeights[name] ?? 0) }
                 }
                 _ = component.weightSet.set(updated)
             }
             face.components.set(component)
+        }
+        #if DEBUG
+        writeInteractionProbeReceipt()
+        #endif
+    }
+
+    private func updateHistory(_ operation: (inout ConversationHistory) throws -> Void) {
+        do { try operation(&history); conversationMessages = history.messages; historyError = "" }
+        catch { conversationMessages = history.messages; historyError = "聊天记录读写失败；当前对话仍可继续" }
+    }
+
+    private func selectHistory() {
+        guard ["hsin", "aemeath"].contains(selectedCharacter),
+              ["default", "deepseek", "openclaw", "hermes", "ollama"].contains(chatProvider) else { return }
+        updateHistory { try $0.select(character: selectedCharacter, provider: chatProvider) }
+    }
+
+    func setSceneVisible(_ visible: Bool) {
+        sceneVisible = visible
+        behavior.interact(at: uptime)
+        if !visible { stopSpeech() }
+    }
+
+    func noteInteraction(wake: Bool = true) {
+        behavior.interact(at: uptime)
+        if wake, posture.phase != .standing { requestPosture(lying: false) }
+    }
+
+    func setExpression(_ name: String) {
+        guard availableExpressions.contains(name) else { return }
+        noteInteraction(wake: false)
+        expression = name
+    }
+
+    func look(_ direction: String) {
+        guard canLook else { return }
+        noteInteraction(wake: false)
+        behavior.look(direction, at: uptime)
+    }
+
+    func touch(_ entity: Entity) {
+        guard touchEnabled, modelReady, entity.name.hasPrefix("HsinTouch_") else { return }
+        let part = String(entity.name.dropFirst("HsinTouch_".count))
+        let wasResting = behavior.restRequested
+        guard behavior.touch(part, at: uptime) else { return }
+        if wasResting { requestPosture(lying: false); return }
+        // A touch never forces a manually selected full-body pose to exit.
+        guard posture.phase == .standing, !busy, activeMotion != "treadmill_running" else { return }
+        let motion = part == "head" ? "finger_heart" : part == "chest" ? "crossed_arms" : part.contains("hand") ? "peace" : "wave"
+        gesture(motion, label: "互动")
+    }
+
+    private func updateTouchTargets() {
+        guard let resources = behaviorResources, let frames = resources.touchFrames[activeMotion], !frames.isEmpty else { return }
+        let duration = motionDurations[activeMotion] ?? 0
+        let time = max(0, motionPlayback?.time ?? 0)
+        let seconds = isIdle || activeMotion == "side_lying" ? (duration > 0 ? time.truncatingRemainder(dividingBy: duration) : 0) : time
+        let frame = frames[min(frames.count - 1, Int(seconds * 30))]
+        for (target, position) in zip(touchTargets, frame) where position.count == 3 {
+            target.position = SIMD3<Float>(position[0], position[1], position[2])
         }
     }
 
@@ -563,6 +757,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func speakTest() {
+        noteInteraction()
         stopSpeech()
         let turn = generation
         let selectedLanguage = language
@@ -692,6 +887,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !busy, !isListening, !text.isEmpty, text.count <= 4000 else { return }
         inputText = ""
+        noteInteraction()
         beginConversation(["type": "user_text", "text": text])
     }
 
@@ -711,6 +907,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 guard turn == generation, let socket = gatewaySocket else { return }
                 let identity = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
                 gatewayTurn = identity
+                updateHistory { try $0.user(self.transcript, turn: identity) }
                 var payload = fields.merging(["turn_id": identity, "character_id": selectedCharacter,
                     "language": language, "stt_provider": sttProvider]) { _, value in value }
                 if chatProvider != "default" { payload["chat_provider"] = chatProvider }
@@ -730,9 +927,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         switch event.type {
         case "transcript":
             transcript = event.text ?? ""
+            if let turn = gatewayTurn { updateHistory { try $0.user(transcript, turn: turn) } }
+            noteInteraction()
             status = "正在回复"
             armTurnWatchdog(seconds: 260)
-        case "reply_delta": fullReply += event.text ?? ""
+        case "reply_delta":
+            fullReply += event.text ?? ""
+            if let turn = gatewayTurn { updateHistory { try $0.reply(fullReply, turn: turn, complete: false) } }
         case "sentence_audio":
             if let encoded = event.audio_base64, let audio = Data(base64Encoded: encoded), !audio.isEmpty {
                 let text = event.text ?? ""
@@ -755,11 +956,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             mouthSmoother.reset()
             fullReply = event.reply ?? ""
             caption = fullReply
+            if let turn = gatewayTurn { updateHistory { try $0.reply(fullReply, turn: turn, complete: false) } }
         case "turn_done":
             turnWatchdog?.cancel()
             turnWatchdog = nil
             turnFinished = true
             fullReply = event.reply ?? fullReply
+            if let turn = gatewayTurn { updateHistory { try $0.reply(fullReply, turn: turn, complete: true) } }
             if player == nil && pendingAudio.isEmpty { busy = false; status = "回复完成" }
         case "turn_error":
             let message = event.error ?? "对话失败"
@@ -813,6 +1016,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func toggleRecording() {
         if isListening { finishRecording(); return }
         guard !busy, recordingTask == nil else { return }
+        noteInteraction()
         let turn = generation
         busy = true
         status = "正在准备麦克风"
@@ -846,6 +1050,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     func stopSpeech(disconnect: Bool = false) {
+        updateHistory { try $0.interrupt() }
         generation += 1
         turnWatchdog?.cancel()
         turnWatchdog = nil

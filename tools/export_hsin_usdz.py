@@ -7,13 +7,13 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 from PIL import Image
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdSkel, UsdUtils, Vt
 
-from tools.spatial_face_mesh import merge_face_meshes
+from tools.spatial_face_mesh import FACE_NAMES, merge_face_meshes
 
-FACE_NAMES = {'まばたき': 'blink', '笑い': 'smile', 'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o'}
 
 
 def package_stage(source: Path, destination: Path) -> None:
@@ -23,6 +23,15 @@ def package_stage(source: Path, destination: Path) -> None:
         'import sys; from pxr import Sdf, UsdUtils; '
         'ok=UsdUtils.CreateNewUsdzPackage(Sdf.AssetPath(sys.argv[1]),sys.argv[2]); sys.exit(0 if ok else 1)',
         str(source.resolve()), str(destination.resolve())], check=True)
+    with ZipFile(destination) as archive:
+        members = set(archive.namelist())
+    packaged = Usd.Stage.Open(str(destination.resolve()))
+    for prim in packaged.Traverse():
+        for attribute in prim.GetAttributes():
+            value = attribute.Get()
+            if isinstance(value, Sdf.AssetPath) and value.path and value.path not in members:
+                raise ValueError('Unpackaged asset reference: ' + value.path)
+
 
 
 def create_surface(stage: Usd.Stage, index: int, source: dict[str, Any], textures: list[str],
@@ -193,6 +202,14 @@ def export(sample_path: Path, output: Path, shared_textures: Path | None = None)
         package_stage(clips / (motion['name'] + '.usdc'), clips / (motion['name'] + '.usdz'))
     package_stage(output / 'model.usdc', output / 'Hsin.usdz')
     (clips / 'manifest.json').write_text(json.dumps({motion['name']: {'duration': motion['duration'], 'looping': motion['looping']} for motion in sample['motions']}))
+    if 'behavior' in sample:
+        behavior = dict(sample['behavior'])
+        available = {morph['name'] for morph in sample['morphs'] if any(
+            any(abs(value) > 1e-7 for value in element['offset']) for element in morph['elements'])}
+        behavior['expressions'] = {name: {FACE_NAMES[key]: weight for key, weight in weights.items()}
+            for name, weights in behavior['expressions'].items()
+            if all(key in available and key in FACE_NAMES for key in weights)}
+        (clips / 'behavior.json').write_text(json.dumps(behavior, ensure_ascii=False))
     if 'posture' in sample:
         (clips / 'posture.json').write_text(json.dumps(sample['posture'], indent=2))
     (output / 'provenance.json').write_text(json.dumps({'source_sha256': sample['sha256'], 'height_m': 1.65, 'shared_textures': str(shared_textures) if shared_textures else None,

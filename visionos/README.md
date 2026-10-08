@@ -1,8 +1,8 @@
 # 心 · Hsin Spatial（visionOS 开发原型）
 
-2026-10-08：**AVP 保持 Build 5；Build 6 面部修复已完成，Build 7 新增 Hsin 侧躺／起身，本轮按用户要求不安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
+2026-10-08：**AVP 保持 Build 5；Build 6 面部修复已完成，Build 7 新增 Hsin 侧躺／起身；Build 8 补聊天历史与阶段 3 互动，本轮按用户要求不安装**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
 
-当前主线为阶段 3 的 Hsin 侧躺、站立与独立过渡；面部表现方面，Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
+当前主线为阶段 1–3 的实装核查与补缺；面部表现方面，Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
 
 ## 本机资源与构建
 
@@ -88,6 +88,23 @@ xcrun simctl launch <模拟器ID> com.hsin.spatial \
 ```
 
 仅 `--posture-probe` 会躺下并保持；`--posture-probe-phase=0.5` 检查躺下中段，`--posture-probe-getup-phase=0.5` 检查起身中段，`--posture-probe-reverse` 在躺下途中请求站立。私有 `Documents/PostureProbe.json` 记录进程与真实状态顺序，检查者须等对应进程回执；启动／加载耗时不能计入动作完成时间。Release 不包含测试入口。
+
+## Build 8：聊天历史与互动补缺
+
+“互动”菜单整合 Hsin 姿态、半速跑步、12 种表情和方向视线；设置中的互动开关按需展开。STT 和语言保存，麦克风每次启动关闭。聊天记录按角色／后端在本机保存，包含中断标记，两种 Hsin 形态共享历史；不将显示记录回灌 Agent。
+
+待机呼吸使用桌面骨骼参数，动作／侧躺独占骨骼。十分钟无实际互动可自动休息，忙碌／加载／隐藏重新计时，输入／对话或自动休息时的触摸安全唤醒。随机环顾不会算作互动。触摸目标随当前片段更新到五个骨骼区域，并提供两秒冷却；这是球形区域近似，精确蒙皮命中与遮挡仍有差距。手动侧躺时触摸不强迫起身。
+
+跑步复用匹配形态的 macOS 校准，半速约 15.73 秒，首尾完整站姿衔接；实际结束后恢复呼吸待机，途中排队姿态／手势。转换扩展固定路径取景。视线目前为手动方向／随机环顾，没有头显视线跟随；跑步没有实时衣发物理，爱弥斯未经校准的全身动作不开放。
+
+双形态原生控制器的跑步复位、自动休息／程序触摸唤醒检查通过，未开启麦克风。Debug 模拟器及 Release 真机目标无签名构建通过，AVP 未更新；完整外观和真实空间点击仍由用户验收。
+
+```sh
+xcrun simctl launch <模拟器ID> com.hsin.spatial \
+  --character-hsin --form-first --interaction-probe --interaction-probe-running
+```
+
+改用 `--interaction-probe-rest` 会调整闲置基准，待真实侧躺完成后程序调用同一触摸入口并等待实际起身；不会采集音频。私有 `Documents/InteractionProbe.json` 记录进程、实际状态、面部权重与触摸区域坐标，Release 不含入口。这种程序调用不能替代用户的空间手势验收。
 
 ## 参考来源
 
