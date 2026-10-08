@@ -11,7 +11,7 @@ FACE_NAMES = {'まばたき': 'blink', '笑い': 'smile', 'あ': 'a', 'い': 'i'
               'FaceRed': 'red', '照れ': 'blush', '星目': 'star', '星目2': 'star2',
               'はぁと': 'heart', 'はぁと2': 'heart2',
               'Left': 'look_right', 'Right': 'look_left', 'Up': 'look_up', 'Down': 'look_down'}
-FACE_CHANNELS = frozenset(FACE_NAMES.values())
+FACE_CHANNELS = frozenset(FACE_NAMES.values()) | {"star_eye", "heart_eye", "tongue"}
 VERTEX_ATTRIBUTES = ('points', 'normals', 'primvars:st', 'primvars:skel:jointIndices', 'primvars:skel:jointWeights')
 
 

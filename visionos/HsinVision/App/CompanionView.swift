@@ -48,7 +48,7 @@ struct CompanionView: View {
             Button("挥手", systemImage: "hand.wave") { companion.wave() }
                 .disabled(!companion.modelReady)
             Menu("互动", systemImage: "figure.wave") {
-                if companion.selectedCharacter == "hsin" {
+                if companion.modelReady {
                     Button("点头") { companion.gesture("nod", label: "点头") }
                     Button("比耶") { companion.gesture("peace", label: "比耶") }
                     Button("比心") { companion.gesture("finger_heart", label: "比心") }
@@ -75,11 +75,14 @@ struct CompanionView: View {
                     }
                 }
             }.disabled(!companion.modelReady)
-            Button(companion.busy ? "打断" : companion.isListening ? "结束说话" : "和\(companion.characterName)说话",
-                   systemImage: companion.busy ? "hand.raised.fill" : companion.isListening ? "stop.fill" : "mic.fill") {
+            Button(companion.voiceControlLabel, systemImage: companion.voiceControlIcon) {
                 companion.noteInteraction()
-                if companion.busy { companion.stopSpeech() }
+                if companion.voiceSessionActive { companion.stopSpeech() }
+                else if companion.busy { companion.stopSpeech() }
                 else { companion.toggleRecording() }
+            }
+            if companion.voiceSessionActive && companion.busy {
+                Button("打断回复", systemImage: "hand.raised") { companion.interruptVoiceTurn() }
             }
             Button("聊天", systemImage: "text.bubble") { companion.noteInteraction(); showChat.toggle() }
             Button("设置", systemImage: "gearshape") { companion.noteInteraction(wake: false); showConnection.toggle() }
@@ -111,7 +114,7 @@ struct CompanionView: View {
             HStack {
                 TextField("输入对话", text: $companion.inputText).onSubmit { companion.sendText() }
                 Button("发送", systemImage: "arrow.up") { companion.sendText() }
-                    .labelStyle(.iconOnly).disabled(companion.busy || companion.isListening)
+                    .labelStyle(.iconOnly).disabled(companion.busy)
             }
         }
     }
@@ -141,6 +144,9 @@ struct CompanionView: View {
                 Text("Hermes").tag("hermes")
                 Text("Ollama").tag("ollama")
             }
+            Toggle("持续语音（停顿后自动发送）", isOn: $companion.continuousSpeech)
+            Text("开启一次麦克风，停顿后发送；回复播放结束再继续收音。")
+                .font(.caption2).foregroundStyle(.secondary)
             Picker("识别方式", selection: $companion.sttProvider) {
                 Text("PC 桥接").tag("remote")
                 Text("智谱").tag("zhipu")
@@ -150,12 +156,12 @@ struct CompanionView: View {
                     Text("中文").tag("zh")
                     Text("日本語").tag("ja")
                 }
-                Button("测试音色") { companion.speakTest() }.disabled(companion.busy || companion.isListening)
+                Button("测试音色") { companion.speakTest() }.disabled(companion.busy)
             }
             DisclosureGroup("互动设置") {
-                Toggle("待机呼吸", isOn: $companion.breathing).disabled(companion.selectedCharacter != "hsin")
+                Toggle("待机呼吸", isOn: $companion.breathing)
                 Toggle("随机环顾", isOn: $companion.randomLook).disabled(!companion.canLook)
-                Toggle("触摸反馈", isOn: $companion.touchEnabled).disabled(companion.selectedCharacter != "hsin")
+                Toggle("触摸反馈", isOn: $companion.touchEnabled)
                 Toggle("闲置十分钟后休息", isOn: $companion.automaticRest).disabled(!companion.canChangePosture)
             }
             DisclosureGroup("连接详情") {

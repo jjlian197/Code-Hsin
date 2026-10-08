@@ -1,6 +1,6 @@
 # 心 · Hsin Spatial（visionOS 开发原型）
 
-2026-10-08：**AVP 已按用户授权覆盖安装 Build 8 Release（0.1），原有连接／角色设置保留；外观与真实互动待验收**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
+2026-10-08：**AVP 已按用户授权覆盖安装 Build 9 Release（0.1），原有连接／角色设置保留；外观与真实互动待验收**。独立 SwiftUI／RealityKit 体积窗口，支持心一／二阶段与爱弥斯、角色音色、主动录音、文字聊天、PC／智谱 STT 和 Mac 网关。角色默认后端为心 → PC Hermes `default`、爱弥斯 → 参考 OpenClaw `agent:main:main`。
 
 当前主线为阶段 1–3 的实装核查与补缺；面部表现方面，Build 6 已合并相关面部网格以修复睫毛同步，并接入五口型与平滑过渡，开发侧验证完成，AVP 验收待完成。阶段 1、2 的基础实现已交付，仍有 AVP 验收待办；完整进度和完成标准以 [迁移计划](../docs/VISIONOS_PARITY_PLAN.md) 为准。Hsin 转换步骤见 [私有资源转换](../docs/VISIONOS_HSIN_ASSETS.md)，后端说明见 [角色后端](../docs/VISIONOS_CHARACTER_BACKENDS.md)。全景空间与完整 macOS 功能迁移尚未完成。
 
@@ -9,7 +9,13 @@
 原模型与动作不提交 Git、不对外分发。使用只读 Aemeath 工作区提供的私有开发资源：
 
 ```sh
-.venv/bin/python tools/prepare_visionos_assets.py --reference-root '/你的路径/aemeath-spirit'
+.venv/bin/python -m pip install -r requirements-visionos-assets.txt
+# 先按私有资源转换文档生成匹配心一阶段的 interaction-first.json。
+.venv/bin/python tools/prepare_visionos_assets.py \
+  --reference-root '/你的路径/aemeath-spirit' \
+  --model '/你的路径/aemeath-spirit/src/assets/models/vrm/鸣潮-爱弥斯-pmx-test.glb' \
+  --hsin-samples .runtime/hsin-spatial/interaction-first.json \
+  --workspace .runtime/aemeath-conversion
 xcodebuild -project visionos/HsinVision.xcodeproj -scheme HsinVision \
   -configuration Debug -destination 'generic/platform=visionOS Simulator' \
   -derivedDataPath visionos/.build CODE_SIGNING_ALLOWED=NO build
@@ -105,6 +111,14 @@ xcrun simctl launch <模拟器ID> com.hsin.spatial \
 ```
 
 改用 `--interaction-probe-rest` 会调整闲置基准，待真实侧躺完成后程序调用同一触摸入口并等待实际起身；不会采集音频。私有 `Documents/InteractionProbe.json` 记录进程、实际状态、面部权重与触摸区域坐标，Release 不含入口。这种程序调用不能替代用户的空间手势验收。
+
+## Build 9：持续语音与爱弥斯动作
+
+开启一次麦克风后，停顿约 0.8 秒自动提交，识别／回复／播放期间暂停采集；实际音频队列结束后继续收音。按钮可关闭语音，回复时另有“打断回复”入口；关闭持续语音开关可使用原手动录音。切换角色、识别方式或语言、离开应用与出错会关闭会话；应用启动始终不开麦。能量 VAD 与连续两轮真人对话需在 AVP 验收。
+
+爱弥斯新增心已有的点头、比耶、比心、双臂交叉、侧躺／起身、半速跑步及共用表情、呼吸、视线、触摸、自动休息入口。动作使用爱弥斯专属世界坐标转换，不复制心的局部骨轴；所有片段保留同一组完整动画轨道。数值端点／连续性与原生跑步复位、自动休息／程序触摸唤醒检查通过，已观察侧躺、起身中段、站姿；衣发实时物理、地面接触与真人空间点击仍待验收。
+
+新增资产工具依赖只读参考 exporter，并在本项目 `.runtime` 生成副本；旧的仅 idle／wave 准备命令在已有完整资源时会拒绝降级覆盖。原 GLB、PMX 和贴图保持只读，生成资源不提交 Git。Build 9 已签名覆盖安装至 AVP，设置保持，PC 真人 STT 恢复由用户确认。
 
 ## 参考来源
 

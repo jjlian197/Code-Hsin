@@ -1,3 +1,4 @@
 # Offline conversion only; not bundled into the macOS or visionOS runtime.
 Pillow>=10
 usd-core==26.8
+numpy>=1.26

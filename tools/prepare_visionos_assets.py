@@ -12,9 +12,22 @@ from tools.repair_spatial_face import repair
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reference-root', type=Path, required=True)
+    parser.add_argument('--model', type=Path, help='Calibrated original Aemeath GLB for full interactions')
+    parser.add_argument('--hsin-samples', type=Path, help='Calibrated Hsin interaction samples')
+    parser.add_argument('--workspace', type=Path, help='Ignored workspace for full conversion')
     options = parser.parse_args()
+    full_options = (options.model, options.hsin_samples, options.workspace)
+    if any(full_options):
+        if not all(full_options):
+            parser.error('--model, --hsin-samples and --workspace must be used together')
+        from tools.prepare_aemeath_interactions import prepare
+        prepare(options.reference_root.resolve(), options.model.resolve(), options.hsin_samples.resolve(), options.workspace)
+        return
     source_root = options.reference_root / 'visionos/AemeathCompanion/Resources'
     output_root = Path(__file__).resolve().parents[1] / 'visionos/HsinVision/Resources'
+    current_manifest = output_root / 'Motions/manifest.json'
+    if current_manifest.exists() and 'side_lying' in json.loads(current_manifest.read_text()):
+        raise ValueError('Full interactions already prepared; use --model --hsin-samples --workspace to preserve them')
     selected = ['Aemeath.usdz', 'Motions/idle.usdz', 'Motions/wave.usdz']
     for relative in selected:
         if not (source_root / relative).is_file():

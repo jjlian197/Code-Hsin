@@ -32,6 +32,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var transcript = ""
     @Published private(set) var fullReply = ""
     @Published private(set) var isListening = false
+    @Published var continuousSpeech = UserDefaults.standard.object(forKey: "continuousSpeech") as? Bool ?? true {
+        didSet { if continuousSpeech != oldValue { stopSpeech(); UserDefaults.standard.set(continuousSpeech, forKey: "continuousSpeech") } }
+    }
+    @Published private(set) var voiceSessionActive = false
+    private var resumeListeningTask: Task<Void, Never>?
+    var voiceControlLabel: String { voiceSessionActive ? "关闭语音" : busy ? "打断" : isListening ? "结束说话" : "和" + characterName + "说话" }
+    var voiceControlIcon: String { voiceSessionActive ? "mic.slash.fill" : busy ? "hand.raised.fill" : isListening ? "stop.fill" : "mic.fill" }
     private let recorder = MicrophoneRecorder()
     private var recordingTask: Task<Void, Never>?
     private var gatewayReader: Task<Void, Never>?
@@ -59,7 +66,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var motionDurations: [String: Double] = [:]
     private var motionPlayback: AnimationPlaybackController?
     @Published private(set) var posture = PostureState()
-    var canChangePosture: Bool { selectedCharacter == "hsin" && ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
+    var canChangePosture: Bool { ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
     private var motionCompletion: EventSubscription?
     private var activeMotion = "idle"
     var wantsLying: Bool { pendingPosture ?? posture.wantsLying }
@@ -119,6 +126,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         selectHistory()
         behavior.interact(at: uptime)
         recorder.onLimit = { [weak self] in self?.finishRecording() }
+        recorder.onSpeech = { [weak self] in self?.noteInteraction() }
         recorder.onFailure = { [weak self] message in self?.stopSpeech(); self?.status = message }
     }
 
@@ -234,8 +242,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             guard requestedResource == modelResource, requestedGeneration == modelGeneration else { return }
             loaded.scale = SIMD3<Float>(repeating: 0.35)
             loaded.position = SIMD3<Float>(0, -0.53, 0)
-            if let directory,
-               let envelopeURL = Bundle.main.url(forResource: "posture", withExtension: "json", subdirectory: directory + "/Motions"),
+            let motionDirectory = directory.map { $0 + "/Motions" } ?? "Motions"
+            if let envelopeURL = Bundle.main.url(forResource: "posture", withExtension: "json", subdirectory: motionDirectory),
                let envelope = try? JSONDecoder().decode(PostureEnvelope.self, from: Data(contentsOf: envelopeURL)) {
                 envelope.place(loaded)
             }
@@ -255,7 +263,6 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             // Match the imported bone clip, as the reference's findWaveAnimation does.
             motionRoot = animationBinding(in: loaded, name: "wave")?.entity
             NSLog("[HsinVision] Model animations %@", animationInventory(in: loaded))
-            let motionDirectory = directory.map { $0 + "/Motions" } ?? "Motions"
             if let manifestURL = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: motionDirectory),
                let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: [String: Any]] {
                 motionDurations = manifest.compactMapValues { $0["duration"] as? Double }
@@ -885,7 +892,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     func sendText() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !busy, !isListening, !text.isEmpty, text.count <= 4000 else { return }
+        guard !busy, !text.isEmpty, text.count <= 4000 else { return }
+        if isListening { recorder.cancel(); isListening = false }
         inputText = ""
         noteInteraction()
         beginConversation(["type": "user_text", "text": text])
@@ -963,7 +971,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             turnFinished = true
             fullReply = event.reply ?? fullReply
             if let turn = gatewayTurn { updateHistory { try $0.reply(fullReply, turn: turn, complete: true) } }
-            if player == nil && pendingAudio.isEmpty { busy = false; status = "回复完成" }
+            if player == nil && pendingAudio.isEmpty { busy = false; status = "回复完成"; resumeVoiceWhenReady() }
         case "turn_error":
             let message = event.error ?? "对话失败"
             stopSpeech()
@@ -1010,34 +1018,65 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             acknowledgePlayback(clip.index, discarded: true)
             status = "本句音频播放失败"
             playNextSentence()
+            if player == nil && pendingAudio.isEmpty && turnFinished {
+                stopSpeech(); status = "音频播放失败，语音已关闭"
+            }
         }
     }
 
     func toggleRecording() {
+        if voiceSessionActive { stopSpeech(); return }
         if isListening { finishRecording(); return }
         guard !busy, recordingTask == nil else { return }
+        voiceSessionActive = continuousSpeech
+        startRecording()
+    }
+
+    private func startRecording() {
+        guard !busy, !isListening, recordingTask == nil, sceneVisible else { return }
         noteInteraction()
         let turn = generation
         busy = true
         status = "正在准备麦克风"
         recordingTask = Task { [weak self] in
             guard let self else { return }
-            defer { recordingTask = nil }
+            defer { if turn == generation { recordingTask = nil } }
             do {
                 try await connectGateway()
-                try await recorder.start()
-                guard turn == generation else { recorder.cancel(); return }
+                try Task.checkCancellation()
+                guard turn == generation else { return }
+                try await recorder.start(continuous: voiceSessionActive)
+                // A stale completion must not cancel a newer capture after stop/switch.
+                guard turn == generation else { return }
                 busy = false
                 isListening = true
                 transcript = ""
-                status = "正在收音，再按一次结束（最多 25 秒）"
+                status = voiceSessionActive ? "语音已开启，等待说话；停顿后自动发送" : "正在收音，再按一次结束（最多 25 秒）"
             } catch {
-                recorder.cancel()
                 guard turn == generation else { return }
-                busy = false
-                status = "麦克风未启动，请检查权限与输入设备"
+                stopSpeech()
+                status = "麦克风或网关未就绪，请检查权限与连接"
             }
         }
+    }
+
+    private func resumeVoiceWhenReady() {
+        guard voiceSessionActive, !busy, player == nil, pendingAudio.isEmpty, turnFinished, sceneVisible else { return }
+        resumeListeningTask?.cancel()
+        let turn = generation
+        // Wait until the actual playback queue is empty and its acoustic tail has faded.
+        resumeListeningTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            guard let self, voiceSessionActive, turn == generation, !busy, player == nil,
+                  pendingAudio.isEmpty, turnFinished, sceneVisible else { return }
+            startRecording()
+        }
+    }
+
+    func interruptVoiceTurn() {
+        guard voiceSessionActive else { stopSpeech(); return }
+        stopSpeech(preserveVoiceSession: true)
+        resumeVoiceWhenReady()
     }
 
     private func finishRecording() {
@@ -1046,10 +1085,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         do {
             let audio = try recorder.finish()
             beginConversation(["type": "user_audio", "audio_base64": audio.base64EncodedString()])
-        } catch { status = "未收到有效录音，请检查麦克风" }
+        } catch { stopSpeech(); status = "未收到有效录音，请检查麦克风" }
     }
 
-    func stopSpeech(disconnect: Bool = false) {
+    func stopSpeech(disconnect: Bool = false, preserveVoiceSession: Bool = false) {
+        if !preserveVoiceSession { voiceSessionActive = false }
+        resumeListeningTask?.cancel()
+        resumeListeningTask = nil
         updateHistory { try $0.interrupt() }
         generation += 1
         turnWatchdog?.cancel()
@@ -1102,11 +1144,12 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--speech-probe") { NSLog("[HsinVision] Speech probe finished success %d mouth reset, counts %@", flag, self.mouthProbeCounts.description) }
             #endif
-            if !flag { self.status = "播放失败" }
+            if !flag { self.stopSpeech(); self.status = "播放失败，语音已关闭"; return }
             self.playNextSentence()
             if self.player == nil && self.pendingAudio.isEmpty && self.turnFinished {
                 self.busy = false
                 self.status = flag ? "播放完成" : "播放失败"
+                self.resumeVoiceWhenReady()
             }
             self.advanceFace()
         }
@@ -1121,12 +1164,17 @@ private final class MicrophoneRecorder {
     private var inputFormat: AVAudioFormat?
     private var captureGeneration = 0
     private var tapInstalled = false
+    private var receivedInput = false
     private var deadline: Task<Void, Never>?
     var onLimit: (() -> Void)?
+    var onSpeech: (() -> Void)?
+    private var activity = SpeechActivity()
+    private var continuous = false
     var onFailure: ((String) -> Void)?
 
-    func start() async throws {
+    func start(continuous: Bool = false) async throws {
         cancel()
+        self.continuous = continuous
         guard await AVAudioApplication.requestRecordPermission() else { throw CaptureError.permission }
         try Task.checkCancellation()
         let input = engine.inputNode
@@ -1146,9 +1194,20 @@ private final class MicrophoneRecorder {
             }
             Task { @MainActor [weak self] in
                 guard let self, self.captureGeneration == identity else { return }
-                let remaining = max(0, Int(format.sampleRate * 25) - self.capturedSamples.count)
-                self.capturedSamples.append(contentsOf: copied.prefix(remaining))
-                if remaining <= copied.count { self.onLimit?() }
+                self.receivedInput = true
+                if self.continuous {
+                    switch self.activity.consume(copied, sampleRate: format.sampleRate) {
+                    case .waiting: break
+                    case .began: self.onSpeech?()
+                    case .utterance(let samples):
+                        self.capturedSamples = samples
+                        self.onLimit?()
+                    }
+                } else {
+                    let remaining = max(0, Int(format.sampleRate * 25) - self.capturedSamples.count)
+                    self.capturedSamples.append(contentsOf: copied.prefix(remaining))
+                    if remaining <= copied.count { self.onLimit?() }
+                }
             }
         }
         tapInstalled = true
@@ -1157,7 +1216,8 @@ private final class MicrophoneRecorder {
         deadline = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let self, self.captureGeneration == identity else { return }
-            if self.capturedSamples.isEmpty { self.onFailure?("未收到麦克风输入"); return }
+            if !self.receivedInput { self.onFailure?("未收到麦克风输入"); return }
+            if self.continuous { return }
             try? await Task.sleep(for: .seconds(20))
             guard !Task.isCancelled, self.captureGeneration == identity else { return }
             self.onLimit?()
@@ -1172,6 +1232,9 @@ private final class MicrophoneRecorder {
         if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         capturedSamples.removeAll(keepingCapacity: false)
         inputFormat = nil
+        receivedInput = false
+        activity = SpeechActivity()
+        continuous = false
     }
 
     func finish() throws -> Data {
