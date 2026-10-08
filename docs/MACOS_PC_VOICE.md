@@ -90,3 +90,9 @@ PYTHONPATH=tests python -m unittest test_settings test_stt test_tts test_remote_
 PC 当前通过 Cloudflare Tunnel 转发到回环 19881，19882 继续仅本机使用。桥接所有端点校验 Bearer 令牌，匿名请求返回 401。Mac 私有配置与 PC 私有令牌文件保存凭据；公共源码与应用包不含令牌。新部署可使用 `tools.deploy_pc_voice --token-file <PC私有令牌文件>`，文件至少 32 字符且无空白。
 
 41 项回归通过。新 RemoteVoice 实际 HTTPS 合成、STT 与无 SSH 进程均已验证；安装版恢复爱弥斯后通过 HTTPS 实际播放并驱动口型，麦克风保持关闭。证据 `.runtime/https-client-validation.json`、`https-stt-validation.json`、`https-bundle-validation.json`。Cloudflare 匿名验证与携带令牌验证使用相同客户端标识。
+
+### 2026-10-08 公网 502 恢复记录
+
+AVP 聊天报连接失败时，Mac 网关与其鉴权握手正常；PC Cloudflare 转发仍运行，但 Hsin 桥接进程已退出，回环 19881 没有监听，公网返回 502。重新启动现有 `20261007-hermes/run_bridge.py` 后恢复鉴权 200／匿名 401。沿用 RTX 4080 SUPER、私有令牌与音色；没有重启 Hermes Agent、修改全局配置或重新部署代码。
+
+通过现有 Mac 网关验证固定文字 → PC Hermes → 有效 TTS WAV，38.54 秒完成；模拟播放 ACK 仅验证链路，不证明头显播放。具体退出原因尚未确认；恢复进程不等于已建立自动重启／开机恢复保障。后续排查须区分公网转发、19881 桥接及 Agent，不凭 502 修改 AVP 令牌。

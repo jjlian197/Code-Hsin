@@ -71,6 +71,13 @@
 - 原生模拟器实际控制器：双形态 `treadmill_running → idle_breathing`；双形态自动休息／程序调用触摸入口得到 `lie_down → side_lying → get_up → idle_breathing`；回执同时确认面部表达通道非零、五个区域存在、麦克风关闭。加速闲置检查只调整单调时钟基准，没有用固定等待伪造动作完成。
 - Debug 模拟器与 Release 真机目标（**无签名**）构建通过；随后按用户授权完成 Release 签名与 AVP 覆盖安装，设备列表确认 Build 8，原有连接／角色设置保留。上述状态及权重不是手势点击、表情自然度、触摸精度、脚掌／裙摆或头显播放的外观验收。
 
+### VOS-BRIDGE-001：聊天提示桥接连接失败
+
+- **状态：2026-10-08 已恢复 PC 桥接，完整开发侧链路通过；AVP 用户重试待确认。**
+- 复现：AVP 地址仍为原 Mac 网关；Mac `/health` 鉴权及 WebSocket welcome 正常。PC 公网 `/health` 返回 Cloudflare 502，PC 转发进程存在，但桥接进程缺失、回环 19881 无监听。
+- 处理：重新启动现有 `20261007-hermes` 部署的桥接入口，沿用令牌、音色与 RTX 4080 SUPER；未启动／修改 Hermes Agent，未更改云转发或系统配置。桥接非正常退出的具体原因尚未确认，不能把一次恢复视为常驻保障。
+- 验证：公网携带凭据返回 200，匿名仍返回 401；通过正在运行的 Mac 网关发送固定测试文字，Hsin 默认 PC Hermes 回复及有效 TTS WAV 均返回，耗时 38.54 秒。检查模拟播放 ACK，不代表 AVP 已实际播放；未开启麦克风，应用无需重新安装。证据在私有 `.runtime/pc-bridge-recovery8.json` 与 `.runtime/visionos-live-chat-recovery8.json`。
+
 ## 下一轮工作顺序
 
 1. Build 8 已安装，用户验收时验证 Build 6–8 面部、双形态姿态与手势、表情、呼吸、跑步、触摸／闲置唤醒、聊天历史和两条 STT／角色声音链路。
