@@ -1,3 +1,5 @@
+import {clothBone, spatialClothConfig} from './spatial_cloth_config.mjs';
+import {spatialHsinIdentity} from './spatial_hsin_identity.mjs';
 // Retarget calibrated body poses in world space; Aemeath's local GLB axes differ from PMX.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +17,7 @@ const model = JSON.parse(raw.toString('utf8', 20, 20 + raw.readUInt32LE(12)));
 const binary = raw.subarray(28 + raw.readUInt32LE(12));
 const desktop = JSON.parse(fs.readFileSync(desktopPath));
 const source = JSON.parse(fs.readFileSync(sourcePath));
-if (source.sha256 !== '4cf8454f7a79c84b88cf3dadfaca3fe2d55d3c6349fffd204acaf24dc78ea82e') throw new Error('Uncalibrated source pose');
+if (spatialHsinIdentity(source.sha256).form !== 'first') throw new Error('Uncalibrated source pose');
 const makeRig = definitions => {
   const nodes = definitions.map(definition => {
     const bone = new THREE.Object3D(); bone.name = definition.name ?? '';
@@ -223,6 +225,10 @@ const expressions = {normal: {}, happy: {happy: .65}, sad: {sad: .7}, angry: {an
   content: {smile: .8, happy: .55}, star_eyes: {star_eye: 1}, heart_eyes: {heart_eye: 1}};
 // Keep one complete set of animated channels across clips; invariant joints stay in USD rest transforms.
 const animatedJoints = new Set([...mapping.keys(), ...desktop.motions.flatMap(motion => motion.frames[0].map(values => values[0])), ...targetIdle.filter((values, index) => values.some((value, axis) => Math.abs(value - targetRest[index][axis]) > 1e-7)).map(values => values[0])].filter(index => skin.joints.includes(index)));
+const realtimeCloth = process.argv.includes('--realtime-cloth');
+const clothIndices = skin.joints.filter(index => clothBone(model.nodes[index].name ?? ''));
+// Animation must reset each simulated joint every frame, so physics never feeds back into its target.
+if (realtimeCloth) for (const index of clothIndices) animatedJoints.add(index);
 for (const motion of motions) motion.frames = motion.frames.map(frame => frame.filter(values => animatedJoints.has(values[0])));
 const payload = {frameRate: 30, motions, behavior: {expressions, touchRegions: regions, touchFrames},
   posture: {floor: standingFloor, bounds: {min: bounds.min.toArray(), max: bounds.max.toArray()}},
@@ -231,6 +237,7 @@ const payload = {frameRate: 30, motions, behavior: {expressions, touchRegions: r
     deformingLegJoints: Object.fromEntries(['足D.L', '足D.R', 'ひざD.L', 'ひざD.R', '足首D.L', '足首D.R', '足先EX.L', '足先EX.R'].map(name => [name, target.names.get(name)])), groundSupport: 'Skinned leg/torso/boot minimum Y, fixed standing floor',
     method: 'World quaternion deltas from model-specific idle, target-parent local conversion, CCD hand support and palm frames',
     limitations: ['Body support calibrated; no realtime cloth or hair ground collision; AVP contact requires acceptance']}};
+if (realtimeCloth) payload.physics = spatialClothConfig(model.nodes.map((bone, index) => ({name: bone.name ?? '', parent: parents.get(index) ?? -1})), skin.joints, clothIndices, [], standingFloor, digest);
 fs.mkdirSync(path.dirname(outputPath), {recursive: true});
 fs.writeFileSync(outputPath, JSON.stringify(payload));
 console.log(JSON.stringify({motions: motions.map(motion => motion.name), calibration: payload.calibration, bounds: payload.posture.bounds}));

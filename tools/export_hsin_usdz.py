@@ -110,6 +110,8 @@ def bind_mesh(mesh: UsdGeom.Mesh, skeleton_path: Sdf.Path, joints: list[int], we
 
 def export(sample_path: Path, output: Path, shared_textures: Path | None = None) -> None:
     sample = json.loads(sample_path.read_text())
+    if 'physics' not in sample and (output / 'Motions/physics.json').exists():
+        raise ValueError('Refusing to reuse realtime output for offline cloth; select a separate output directory')
     output.mkdir(parents=True, exist_ok=True)
     stage = Usd.Stage.CreateInMemory()
     stage.SetTimeCodesPerSecond(30)
@@ -210,10 +212,13 @@ def export(sample_path: Path, output: Path, shared_textures: Path | None = None)
             for name, weights in behavior['expressions'].items()
             if all(key in available and key in FACE_NAMES for key in weights)}
         (clips / 'behavior.json').write_text(json.dumps(behavior, ensure_ascii=False))
+    if 'physics' in sample:
+        (clips / 'physics.json').write_text(json.dumps(sample['physics'], ensure_ascii=False))
     if 'posture' in sample:
         (clips / 'posture.json').write_text(json.dumps(sample['posture'], indent=2))
-    (output / 'provenance.json').write_text(json.dumps({'source_sha256': sample['sha256'], 'height_m': 1.65, 'shared_textures': str(shared_textures) if shared_textures else None,
-        'limitations': ['SDEF treated as linear skinning', 'MMD outline/toon and real-time cloth not yet ported']}))
+    (output / 'provenance.json').write_text(json.dumps({'source_sha256': sample['sha256'], 'calibration_sha256': sample.get('calibration_sha256', sample['sha256']),
+        'trial_chest_rig': sample.get('trial_chest_rig', False), 'native_cloth': 'physics' in sample, 'height_m': 1.65, 'shared_textures': str(shared_textures) if shared_textures else None,
+        'limitations': ['SDEF treated as linear skinning', 'MMD outline/toon not ported; native bone physics requires matching metadata']}))
     print(f"Exported Hsin: {len(sample['vertices'])} vertices, {len(sample['bones'])} joints")
 
 

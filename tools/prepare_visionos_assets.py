@@ -15,13 +15,16 @@ def main() -> None:
     parser.add_argument('--model', type=Path, help='Calibrated original Aemeath GLB for full interactions')
     parser.add_argument('--hsin-samples', type=Path, help='Calibrated Hsin interaction samples')
     parser.add_argument('--workspace', type=Path, help='Ignored workspace for full conversion')
+    parser.add_argument('--realtime-cloth', action='store_true')
     options = parser.parse_args()
     full_options = (options.model, options.hsin_samples, options.workspace)
+    if options.realtime_cloth and not all(full_options):
+        parser.error('--realtime-cloth requires --model, --hsin-samples and --workspace')
     if any(full_options):
         if not all(full_options):
             parser.error('--model, --hsin-samples and --workspace must be used together')
         from tools.prepare_aemeath_interactions import prepare
-        prepare(options.reference_root.resolve(), options.model.resolve(), options.hsin_samples.resolve(), options.workspace)
+        prepare(options.reference_root.resolve(), options.model.resolve(), options.hsin_samples.resolve(), options.workspace, options.realtime_cloth)
         return
     source_root = options.reference_root / 'visionos/AemeathCompanion/Resources'
     output_root = Path(__file__).resolve().parents[1] / 'visionos/HsinVision/Resources'

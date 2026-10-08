@@ -1,10 +1,12 @@
+import {spatialClothConfig} from './spatial_cloth_config.mjs';
+import {spatialHsinIdentity} from './spatial_hsin_identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as THREE from '../src/assets/pmx_viewer/lib/three/three.module.js';
 import {Parser} from '../src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.module.js';
 import {MMDAnimationHelper} from '../src/assets/pmx_viewer/lib/three/addons/animation/MMDAnimationHelper.js';
-import {hsinForm, runningClip} from '../src/assets/pmx_viewer/hsin_motion.js';
+import {runningClip} from '../src/assets/pmx_viewer/hsin_motion.js';
 import {expressions} from '../src/assets/pmx_viewer/behavior.js';
 import {createSpatialMesh, boneChannels} from './spatial_sampling.mjs';
 
@@ -15,7 +17,7 @@ const output = fs.existsSync(outputPath) ? fs.realpathSync(outputPath) : path.re
 if ([inputPath, sample.source].some(source => fs.realpathSync(source) === output)) throw new Error('Output must not replace source assets');
 const original = fs.readFileSync(sample.source);
 const digest = crypto.createHash('sha256').update(original).digest('hex');
-const form = hsinForm(digest);
+const form = spatialHsinIdentity(digest).form;
 if (!form || digest !== sample.sha256) throw new Error('Uncalibrated or changed PMX');
 const model = new Parser().parsePmx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), true);
 const mesh = createSpatialMesh(model), bones = mesh.skeleton.bones;
@@ -90,6 +92,14 @@ sample.posture.bounds = {min: envelope.min.toArray(), max: envelope.max.toArray(
 sample.behavior = {expressions, touchRegions: regions.map(({name, radius}) => ({name, radius})), touchFrames,
   running_calibration_sha256: crypto.createHash('sha256').update(calibrationBytes).digest('hex'),
   limitations: ['Touch uses animated bone spheres, not exact skinned-triangle raycasts', 'Running has no real-time garment physics']};
+if (sample.realtime_cloth) {
+  const dynamic = model.rigidBodies.filter(body => body.type > 0 && body.boneIndex >= 0).map(body => body.boneIndex);
+  const seams = model.constraints.map(link => [model.rigidBodies[link.rigidBodyIndex1]?.boneIndex, model.rigidBodies[link.rigidBodyIndex2]?.boneIndex]);
+  const grants = model.bones.flatMap((bone, index) => /^ZSpring_Spine_/.test(bone.name) && bone.grant ? [{joint: index, source: bone.grant.parentIndex, ratio: bone.grant.ratio}] : []);
+  sample.physics = spatialClothConfig(sample.bones, sample.bones.map((_, index) => index), dynamic, seams, sample.posture.floor, digest, grants);
+  sample.posture.cloth = 'Neutral garment animation; native realtime bone PBD';
+  sample.posture.limitations = ['Native bone constraints do not provide per-vertex or self collision'];
+}
 fs.mkdirSync(path.dirname(outputPath), {recursive: true});
 fs.writeFileSync(outputPath, JSON.stringify(sample));
 console.log(JSON.stringify({form, motions: sample.motions.map(motion => motion.name), touchRegions: regions.length}));

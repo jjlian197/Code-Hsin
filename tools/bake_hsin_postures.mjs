@@ -1,3 +1,4 @@
+import {spatialHsinIdentity} from './spatial_hsin_identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -22,7 +23,7 @@ if (digest !== sample.sha256) throw new Error('Original PMX no longer matches ge
 const model = new Parser().parsePmx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), true);
 const mesh = createSpatialMesh(model), bones = mesh.skeleton.bones;
 const rest = bones.map(bone => ({position: bone.position.clone(), rotation: bone.quaternion.clone()}));
-const transitions = transitionAssets(JSON.parse(fs.readFileSync(transitionPath)), digest, mesh);
+const transitions = transitionAssets(JSON.parse(fs.readFileSync(transitionPath)), spatialHsinIdentity(digest).calibrationHash, mesh);
 const grantSolver = new MMDAnimationHelper().createGrantSolver(mesh);
 const reset = () => bones.forEach((bone, index) => { bone.position.copy(rest[index].position); bone.quaternion.copy(rest[index].rotation); });
 const update = () => {
@@ -52,9 +53,10 @@ for (const motion of sample.motions) {
 }
 const standing = sample.motions.find(motion => motion.name === 'idle').frames[0];
 const cloth = new PoseCloth(mesh, transitions.floor);
+const realtimeCloth = process.argv.includes('--realtime-cloth');
 const evaluate = (channels, seconds, strength = 1) => {
   reset(); apply(idle, seconds); apply(channels, seconds); update();
-  cloth.update(1 / 30, strength); mesh.updateMatrixWorld(true); mesh.skeleton.update();
+  if (!realtimeCloth) cloth.update(1 / 30, strength); mesh.updateMatrixWorld(true); mesh.skeleton.update();
 };
 const side = tracks(transitions.clips.side_lying);
 // A deterministic settled hold lets both independently baked transitions meet exactly.
@@ -97,6 +99,7 @@ for (const [name, clip] of Object.entries(transitions.clips)) {
   }
   sample.motions.push({name, duration: clip.duration, looping: name === 'side_lying', frames});
 }
+sample.realtime_cloth = realtimeCloth;
 sample.posture = {source_sha256: crypto.createHash('sha256').update(fs.readFileSync(transitionPath)).digest('hex'),
   model_sha256: digest, floor: transitions.floor * sample.scale,
   bounds: {min: envelope.min.toArray(), max: envelope.max.toArray()},

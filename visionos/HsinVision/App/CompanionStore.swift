@@ -69,6 +69,18 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var posture = PostureState()
     var canChangePosture: Bool { ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
     private var motionCompletion: EventSubscription?
+    private var physicsSubscription: EventSubscription?
+    private var realtimeCloth: RealityCloth?
+    @Published var clothPhysics = UserDefaults.standard.object(forKey: "clothPhysics") as? Bool ?? true {
+        didSet { if clothPhysics != oldValue { realtimeCloth?.reset(); UserDefaults.standard.set(clothPhysics, forKey: "clothPhysics") } }
+    }
+    @Published private(set) var physicsStatus = "实时衣发未加载"
+    private var lastPhysicsReport = 0.0
+    #if DEBUG
+    private var physicsProbeFrames = 0
+    private var physicsProbeTask: Task<Void, Never>?
+    private var physicsToggleStates: [[String: Any]] = []
+    #endif
     private var activeMotion = "idle"
     var wantsLying: Bool { pendingPosture ?? posture.wantsLying }
     @Published private var pendingPosture: Bool?
@@ -133,6 +145,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     override init() {
         super.init()
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--physics-probe") { clothPhysics = true }
         if ProcessInfo.processInfo.arguments.contains("--character-aemeath") { selectedCharacter = "aemeath" }
         if ProcessInfo.processInfo.arguments.contains("--form-first") { selectedForm = "first" }
         if ProcessInfo.processInfo.arguments.contains("--character-hsin") { selectedCharacter = "hsin" }
@@ -252,6 +265,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let requestedResource = modelResource
         let directory = resourceDirectory
         modelReady = false
+        physicsSubscription?.cancel(); physicsSubscription = nil; realtimeCloth = nil
+        physicsStatus = "实时衣发正在加载"
         resetPosture()
         motionRoot = nil
         faces = []
@@ -329,6 +344,17 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 status = "骨骼动作未加载，请检查模型与动作资源"
                 return
             }
+            if let physicsURL = Bundle.main.url(forResource: "physics", withExtension: "json", subdirectory: motionDirectory) {
+                let configuration = try JSONDecoder().decode(ClothConfiguration.self, from: Data(contentsOf: physicsURL))
+                realtimeCloth = RealityCloth(character: loaded, configuration: configuration)
+                physicsStatus = realtimeCloth == nil ? "衣发骨架或配置不匹配，未启用物理" : "实时衣发已就绪"
+                physicsSubscription = content.subscribe(to: AnimationEvents.SkeletalPoseUpdateComplete.self) { [weak self] event in
+                    Task { @MainActor [weak self] in
+                        guard let self, requestedGeneration == self.modelGeneration else { return }
+                        self.advancePhysics(delta: event.deltaTime)
+                    }
+                }
+            } else { physicsStatus = "当前资源未包含实时衣发配置" }
             modelReady = true
             behavior.interact(at: uptime)
             updateTouchTargets()
@@ -354,6 +380,18 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                         guard next.play() else { throw BridgeError.message("测试音频未播放") }
                         NSLog("[HsinVision] Speech probe started duration %.3f cues %@", next.duration, Set(timeline.cues).sorted().joined(separator: ","))
                     } catch { status = "测试音频失败" }
+                }
+            }
+            if ProcessInfo.processInfo.arguments.contains("--physics-probe-toggle") {
+                physicsProbeTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled, let self, requestedGeneration == self.modelGeneration else { return }
+                    self.clothPhysics = false
+                    try? await Task.sleep(for: .seconds(1))
+                    self.physicsToggleStates.append(self.realtimeCloth?.snapshot ?? [:])
+                    self.clothPhysics = true
+                    try? await Task.sleep(for: .seconds(2))
+                    self.physicsToggleStates.append(self.realtimeCloth?.snapshot ?? [:])
                 }
             }
             startPostureProbe()
@@ -496,6 +534,24 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     #if DEBUG
+    private func writePhysicsInventory(delta: Float) {
+        physicsProbeFrames += 1
+        guard physicsProbeFrames % 30 == 0, let character else { return }
+        var entries: [[String: Any]] = []
+        func inspect(_ entity: Entity) {
+            if let component = entity.components[SkeletalPosesComponent.self] {
+                entries.append(["entity": entity.name, "poses": Array(component.poses).map { ["id": $0.id, "joints": $0.jointNames, "transforms": $0.jointTransforms.count] }])
+            }
+            if let model = entity as? ModelEntity, !model.jointNames.isEmpty { entries.append(["model": model.name, "joints": model.jointNames]) }
+            for child in entity.children { inspect(child) }
+        }
+        inspect(character)
+        let receipt: [String: Any] = ["events": physicsProbeFrames, "delta": delta, "rigs": entries, "isListening": isListening, "physics": realtimeCloth?.snapshot ?? [:], "toggleStates": physicsToggleStates]
+        if let bytes = try? JSONSerialization.data(withJSONObject: receipt) {
+            try? bytes.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("PhysicsProbe.json"), options: .atomic)
+        }
+    }
+
     private func writePostureProbeReceipt() {
         guard ProcessInfo.processInfo.arguments.contains("--posture-probe") else { return }
         let state = posture.phase.rawValue + ":" + activeMotion
@@ -743,6 +799,16 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         for (target, position) in zip(touchTargets, frame) where position.count == 3 {
             target.position = SIMD3<Float>(position[0], position[1], position[2])
         }
+    }
+
+    private func advancePhysics(delta: Float) {
+        realtimeCloth?.update(delta: delta, enabled: clothPhysics && sceneVisible && modelReady)
+        if uptime - lastPhysicsReport >= 1 {
+            physicsStatus = realtimeCloth?.status ?? physicsStatus; lastPhysicsReport = uptime
+        }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--physics-probe") { writePhysicsInventory(delta: delta) }
+        #endif
     }
 
     private func updatePresentation() {

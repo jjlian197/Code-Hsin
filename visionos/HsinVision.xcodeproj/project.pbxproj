@@ -22,6 +22,8 @@
 		A14 = {isa = PBXBuildFile; fileRef = B15; };
 		A15 = {isa = PBXBuildFile; fileRef = B16; };
 		A16 = {isa = PBXBuildFile; fileRef = B17; };
+		A17 = {isa = PBXBuildFile; fileRef = B18; };
+		A18 = {isa = PBXBuildFile; fileRef = B19; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +43,8 @@
 		B15 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCare.swift; sourceTree = "<group>"; };
 		B16 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharacterPresentation.swift; sourceTree = "<group>"; };
 		B17 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCareView.swift; sourceTree = "<group>"; };
+		B18 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoneCloth.swift; sourceTree = "<group>"; };
+		B19 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityCloth.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -76,7 +80,7 @@
 				B1 /* HsinVisionApp.swift */,
 				B2 /* CompanionStore.swift */,
 				B3 /* CompanionView.swift */,
-				B10, B11, B12, B13, B14, B15, B16, B17,
+				B10, B11, B12, B13, B14, B15, B16, B17, B18, B19,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -165,7 +169,7 @@
 				A1 /* HsinVisionApp.swift in Sources */,
 				A2 /* CompanionStore.swift in Sources */,
 				A3 /* CompanionView.swift in Sources */,
-				A9, A10, A11, A12, A13, A14, A15, A16,
+				A9, A10, A11, A12, A13, A14, A15, A16, A17, A18,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -194,7 +198,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HsinVision/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Hsin Spatial";
@@ -216,7 +220,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HsinVision/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Hsin Spatial";

@@ -63,3 +63,27 @@ node --loader ./tools/node_three_loader.mjs tools/bake_hsin_postures.mjs .runtim
 `Motions/behavior.json` 包含可用表达与每帧五个触摸区域位置；表达取自 macOS `expressions`，映射到统一的原生通道。两形态当前均支持 12 种表达及四向视线；相关非零面部网格一并合并，保留各材质。触摸采用动画骨骼球形区域近似，尚非实际蒙皮三角形命中。
 
 转换拒绝覆盖输入采样或原模型。打包后逐个检查资产引用确实存在于 USDZ 中；两形态分别核对 47／45 个贴图引用。这只证明资源引用完整，不证明透明材质、表情／跑步或 AVP 外观已验收。
+
+## Build 11：胸辅助骨试验版本与实时衣发
+
+仅 visionOS 的默认两形态资源替换为只读试验 PMX；macOS 模型及配置不变。转换器单独登记已验证 SHA-256，不把任意 PMX 视为兼容：
+
+| 形态 | PMX 版本 | SHA-256 |
+| --- | --- | --- |
+| 一阶段 | 心_胸辅助骨_物理后试验.pmx | `793b1e9ed92e44154add8616423d5f7932422303966e0541a6c0597a4ae703c3` |
+| 二阶段 | 心_二阶段_胸辅助骨_物理后试验.pmx | `247f1f0adb21ad4a6ef6bc51a03ab2293a956a4965ebb63c6a8066af3e7c02cf` |
+
+两份试验版与各自原版的顶点、蒙皮、面片、贴图、材质、形变、刚体及约束一致；仅十根 `ZSpring_Spine_*` 辅助骨的父骨及物理后标记改变。故沿用对应身体动作校准，按新父子层级重新生成 USD 骨架、逆绑定和全部动作；原版动作不能直接混入新版骨架。来源记录同时保存试验版哈希与原版校准哈希。
+
+生成实时资源时，姿态转换使用 `--realtime-cloth`，跳过离线 PoseCloth，原生动画每帧恢复全部模拟骨骼的动画目标：
+
+```sh
+node --loader ./tools/node_three_loader.mjs tools/bake_hsin_spatial.mjs /path/心_胸辅助骨_物理后试验.pmx .runtime/trial/first.json
+node --loader ./tools/node_three_loader.mjs tools/bake_hsin_postures.mjs .runtime/trial/first.json src/assets/motions/first.json .runtime/trial/posture-first.json --realtime-cloth
+node --loader ./tools/node_three_loader.mjs tools/bake_hsin_interactions.mjs .runtime/trial/posture-first.json .runtime/trial/interaction-first.json
+.venv/bin/python -m tools.export_hsin_usdz .runtime/trial/interaction-first.json .runtime/trial/export-first
+```
+
+二阶段同理，使用对应 PMX、`second.json` 校准及必要的 `--shared-textures`。部署复制 `Hsin.usdz`、`provenance.json` 及全部 `Motions`（含 `physics.json`）。不要只替换模型或只复制动作。爱弥斯完整转换调用 `tools/prepare_aemeath_interactions.py --realtime-cloth`；旧离线模式拒绝覆盖已有实时配置，避免残留配置与错误动画叠加。
+
+`physics.json` 包含经过校验的骨骼路径、粒子／链／接缝、模型地面、身体胶囊和十根胸辅助骨的旋转付与。运行时在 [Apple 骨架更新完成事件](https://developer.apple.com/documentation/realitykit/animationevents/skeletalposeupdatecomplete) 后读取动画姿态，经固定 120 Hz 骨骼 PBD 求解后写回 `SkeletalPosesComponent`。这是实时骨骼衣发，身体由既有动画控制；不等同于 MMD Bullet、逐顶点布料、自碰撞或真实房间碰撞。AVP 外观、穿插和性能仍需验收。

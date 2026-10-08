@@ -16,7 +16,9 @@ from tools.repair_spatial_face import repair
 from tools.export_hsin_usdz import package_stage
 
 
-def prepare(reference: Path, model: Path, hsin_samples: Path, workspace: Path) -> None:
+def prepare(reference: Path, model: Path, hsin_samples: Path, workspace: Path, realtime_cloth: bool = False) -> None:
+    if not realtime_cloth and (PROJECT / 'visionos/HsinVision/Resources/Motions/physics.json').exists():
+        raise ValueError('Existing realtime resources require --realtime-cloth; refusing stale physics metadata')
     workspace = workspace.resolve()
     # Generated files stay in our ignored workspace; reference sources are never destinations.
     if not workspace.is_relative_to(PROJECT / '.runtime'):
@@ -25,7 +27,7 @@ def prepare(reference: Path, model: Path, hsin_samples: Path, workspace: Path) -
     desktop = workspace / 'desktop.json'
     sampled = workspace / 'interactions.json'
     subprocess.run(['node', str(reference / 'visionos/Tools/bake_motion.mjs'), str(model), str(desktop)], cwd=reference, check=True)
-    subprocess.run(['node', str(PROJECT / 'tools/bake_aemeath_interactions.mjs'), str(model), str(desktop), str(hsin_samples), str(sampled)], cwd=PROJECT, check=True)
+    subprocess.run(['node', str(PROJECT / 'tools/bake_aemeath_interactions.mjs'), str(model), str(desktop), str(hsin_samples), str(sampled), *(['--realtime-cloth'] if realtime_cloth else [])], cwd=PROJECT, check=True)
     sys.path.insert(0, str(reference))
     specification = importlib.util.spec_from_file_location('aemeath_reference_export', reference / 'visionos/Tools/export_usdz.py')
     if specification is None or specification.loader is None:
@@ -45,7 +47,7 @@ def prepare(reference: Path, model: Path, hsin_samples: Path, workspace: Path) -
     repaired = workspace / 'repaired'
     face_report = repair(generated / 'Aemeath.usdz', repaired)
     payload = json.loads(sampled.read_text())
-    for name in ('behavior', 'posture'):
+    for name in ('behavior', 'posture', *(['physics'] if 'physics' in payload else [])):
         (clips / (name + '.json')).write_text(json.dumps(payload[name], ensure_ascii=False))
     output = PROJECT / 'visionos/HsinVision/Resources'
     output.mkdir(parents=True, exist_ok=True)
@@ -66,8 +68,9 @@ def main() -> None:
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--hsin-samples', type=Path, required=True)
     parser.add_argument('--workspace', type=Path, required=True)
+    parser.add_argument('--realtime-cloth', action='store_true')
     options = parser.parse_args()
-    prepare(options.reference_root.resolve(), options.model.resolve(), options.hsin_samples.resolve(), options.workspace)
+    prepare(options.reference_root.resolve(), options.model.resolve(), options.hsin_samples.resolve(), options.workspace, options.realtime_cloth)
 
 if __name__ == '__main__':
     main()

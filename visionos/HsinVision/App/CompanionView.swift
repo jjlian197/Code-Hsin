@@ -182,6 +182,8 @@ struct CompanionView: View {
             DisclosureGroup("互动设置") {
                 Toggle("待机呼吸", isOn: $companion.breathing)
                 Toggle("随机环顾", isOn: $companion.randomLook).disabled(!companion.canLook)
+                Toggle("实时衣发物理", isOn: $companion.clothPhysics)
+                Text(companion.physicsStatus).font(.caption2).foregroundStyle(.secondary)
                 Toggle("触摸反馈", isOn: $companion.touchEnabled)
                 Toggle("闲置十分钟后休息", isOn: $companion.automaticRest).disabled(!companion.canChangePosture)
             }

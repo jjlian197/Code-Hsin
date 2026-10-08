@@ -1,3 +1,4 @@
+import {spatialHsinIdentity} from './spatial_hsin_identity.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -9,6 +10,8 @@ import {createSpatialMesh} from './spatial_sampling.mjs';
 const [modelPath, outputPath] = process.argv.slice(2);
 if (!modelPath || !outputPath) throw new Error('Usage: bake_hsin_spatial.mjs model.pmx output.json');
 const original = fs.readFileSync(modelPath);
+const digest = crypto.createHash('sha256').update(original).digest('hex');
+const identity = spatialHsinIdentity(digest);
 const model = new Parser().parsePmx(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength), true);
 const heights = model.vertices.map(vertex => vertex.position[1]);
 const scale = 1.65 / (Math.max(...heights) - Math.min(...heights));
@@ -36,7 +39,7 @@ const motions = selectedNames.map(name => {
   return {name, duration, looping: name === 'idle', frames};
 });
 const payload = {
-  source: path.resolve(modelPath), sha256: crypto.createHash('sha256').update(original).digest('hex'), scale,
+  source: path.resolve(modelPath), sha256: digest, calibration_sha256: identity.calibrationHash, trial_chest_rig: identity.trial, scale,
   bones: model.bones.map((bone, index) => ({name: bone.name, parent: bone.parentIndex, position: restPositions[index].map(value => value * scale)})),
   vertices: model.vertices.map(vertex => ({position: vertex.position.map(value => value * scale), normal: vertex.normal,
     uv: [vertex.uv[0], 1 - vertex.uv[1]], joints: [...vertex.skinIndices, 0, 0, 0, 0].slice(0, 4), weights: [...vertex.skinWeights, 0, 0, 0, 0].slice(0, 4)})),
