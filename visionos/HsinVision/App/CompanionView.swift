@@ -7,6 +7,11 @@ struct CompanionView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showConnection = false
     @State private var showChat = false
+    #if DEBUG
+    @State private var showCare = ProcessInfo.processInfo.arguments.contains("--care-panel-probe")
+    #else
+    @State private var showCare = false
+    #endif
     private let animationClock = Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -28,7 +33,8 @@ struct CompanionView: View {
         .ornament(attachmentAnchor: .scene(.bottom)) {
             VStack(spacing: 8) {
                 controlBar
-                if showConnection { connectionPanel }
+                if showConnection { ScrollView { connectionPanel }.frame(maxHeight: 360) }
+                CompanionCareView(care: companion.care, expanded: showCare)
                 if !companion.transcript.isEmpty {
                     Text("你：\(companion.transcript)").font(.caption).lineLimit(2)
                 }
@@ -85,7 +91,8 @@ struct CompanionView: View {
                 Button("打断回复", systemImage: "hand.raised") { companion.interruptVoiceTurn() }
             }
             Button("聊天", systemImage: "text.bubble") { companion.noteInteraction(); showChat.toggle() }
-            Button("设置", systemImage: "gearshape") { companion.noteInteraction(wake: false); showConnection.toggle() }
+            Button("陪伴", systemImage: "heart") { companion.noteInteraction(wake: false); showCare.toggle(); if showCare { showConnection = false } }
+            Button("设置", systemImage: "gearshape") { companion.noteInteraction(wake: false); showConnection.toggle(); if showConnection { showCare = false } }
         }
     }
 
@@ -147,6 +154,11 @@ struct CompanionView: View {
             Toggle("持续语音（停顿后自动发送）", isOn: $companion.continuousSpeech)
             Text("开启一次麦克风，停顿后发送；回复播放结束再继续收音。")
                 .font(.caption2).foregroundStyle(.secondary)
+            Picker("断句停顿", selection: $companion.speechPause) {
+                Text("快速 · 0.45 秒").tag(0.45)
+                Text("标准 · 0.55 秒").tag(0.55)
+                Text("宽松 · 0.8 秒").tag(0.8)
+            }
             Picker("识别方式", selection: $companion.sttProvider) {
                 Text("PC 桥接").tag("remote")
                 Text("智谱").tag("zhipu")
@@ -157,6 +169,15 @@ struct CompanionView: View {
                     Text("日本語").tag("ja")
                 }
                 Button("测试音色") { companion.speakTest() }.disabled(companion.busy)
+            }
+            DisclosureGroup("显示设置") {
+                Picker("角色大小", selection: $companion.displaySize) {
+                    Text("80%").tag(0.8); Text("100%").tag(1.0); Text("125%").tag(1.25)
+                }
+                Picker("取景", selection: $companion.viewMode) {
+                    Text("全身").tag("full"); Text("近景正面").tag("head_front")
+                    Text("近景左侧").tag("head_left"); Text("近景右侧").tag("head_right")
+                }
             }
             DisclosureGroup("互动设置") {
                 Toggle("待机呼吸", isOn: $companion.breathing)
@@ -173,6 +194,10 @@ struct CompanionView: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField("Mac 访问令牌", text: $companion.gatewayToken)
                 Button("保存 Mac 连接") { companion.saveGatewayConnection() }
+                Button(companion.checkingConnections ? "正在检查连接…" : "检查连接") { companion.checkConnections() }
+                    .disabled(companion.checkingConnections)
+                if !companion.connectionDiagnostics.isEmpty { Text(companion.connectionDiagnostics).font(.caption2) }
+                if !companion.recognitionTiming.isEmpty { Text(companion.recognitionTiming).font(.caption2) }
                 Text("HTTP 仅用于可信局域网，跨网请使用 HTTPS。")
                     .font(.caption2).foregroundStyle(.secondary)
             }

@@ -32,3 +32,15 @@ for (const name of ['lie_down', 'get_up', 'side_lying']) {
 assert.equal(Object.keys(sample.behavior.expressions).length, 12);
 assert.equal(sample.behavior.touchRegions.length, 5);
 console.log(`Aemeath ${sample.motions.length} clips, ${ids.length} common animated joints, endpoints, finite data and continuity passed; largest step ${maximum}`);
+
+assert(Math.abs(sample.calibration.standingFloor - sample.calibration.sideSupportY) < 1e-5);
+for (const [name, id] of Object.entries(sample.calibration.deformingLegJoints)) {
+  const joint = ids.indexOf(id);
+  assert(joint >= 0, `Missing skin deforming joint ${name}`);
+  // Toe EX bones inherit ankle motion; their local toe curl can remain neutral.
+  if (name.startsWith("足先EX")) continue;
+  const idle = new THREE.Quaternion().fromArray(motions.idle.frames[0][joint], 4);
+  const excursion = Math.max(...motions.treadmill_running.frames.map(frame => idle.angleTo(new THREE.Quaternion().fromArray(frame[joint], 4))));
+  assert(excursion > 0.15, `Running does not drive ${name}: ${excursion}`);
+}
+console.log('Deforming D/EX leg joints animate and side/standing body support match');

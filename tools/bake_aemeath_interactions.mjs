@@ -56,6 +56,10 @@ for (const [suffix, prefix] of [['.L', '左'], ['.R', '右']]) {
   for (const name of ['肩', '腕', 'ひじ', '手首', '足', 'ひざ', '足首', 'つま先']) {
     if (target.names.has(name + suffix) && origin.names.has(prefix + name)) mapping.set(target.names.get(name + suffix), origin.names.get(prefix + name));
   }
+  // The GLB skins its legs to the D chain; ordinary leg bones are control bones.
+  for (const [targetName, sourceName] of [['足D', '足'], ['ひざD', 'ひざ'], ['足首D', '足首'], ['足先EX', 'つま先']]) {
+    if (target.names.has(targetName + suffix) && origin.names.has(prefix + sourceName)) mapping.set(target.names.get(targetName + suffix), origin.names.get(prefix + sourceName));
+  }
   for (const [name, targetIndex] of target.names) {
     if (name.endsWith(suffix) && /指/.test(name)) {
       const original = origin.names.get(prefix + name.slice(0, -2));
@@ -141,13 +145,53 @@ const retarget = (sourceFrame, support) => {
   }
   return channel(target);
 };
+// Sample real linear-skinned vertices for fixed all-motion bounds, using this GLB's inverse binds.
+const accessor = index => {
+  const attribute = model.accessors[index], view = model.bufferViews[attribute.bufferView];
+  const widths = {SCALAR: 1, VEC3: 3, VEC4: 4, MAT4: 16};
+  const bytes = {5121: 1, 5123: 2, 5125: 4, 5126: 4}[attribute.componentType];
+  const method = {5121: 'getUint8', 5123: 'getUint16', 5125: 'getUint32', 5126: 'getFloat32'}[attribute.componentType];
+  const width = widths[attribute.type], stride = view.byteStride ?? width * bytes;
+  const buffer = new DataView(binary.buffer, binary.byteOffset, binary.byteLength);
+  return Array.from({length: attribute.count}, (_, row) => Array.from({length: width}, (_, column) => buffer[method]((view.byteOffset ?? 0) + (attribute.byteOffset ?? 0) + row * stride + column * bytes, true)));
+};
+const skin = model.skins[0];
+const inverse = accessor(skin.inverseBindMatrices).map(values => new THREE.Matrix4().fromArray(values));
+const vertices = model.meshes[0].primitives.flatMap((primitive, primitiveIndex) => {
+  if (primitiveIndex === 11) return []; // The exported character omits this unattached overlay plane.
+  const positions = accessor(primitive.attributes.POSITION), joints = accessor(primitive.attributes.JOINTS_0), weights = accessor(primitive.attributes.WEIGHTS_0);
+  return positions.map((position, index) => ({position, joints: joints[index], weights: weights[index], primitiveIndex}));
+});
+const physicalVertices = vertices.filter(vertex => [12, 13, 15].includes(vertex.primitiveIndex));
+const skinnedMinimumY = frame => {
+  apply(target, frame);
+  const matrices = skin.joints.map((joint, slot) => target.nodes[joint].matrixWorld.clone().multiply(inverse[slot]));
+  let lowest = Infinity;
+  for (const vertex of physicalVertices) {
+    const point = new THREE.Vector3();
+    for (let slot = 0; slot < 4; slot++) if (vertex.weights[slot] > 0) point.add(new THREE.Vector3().fromArray(vertex.position).applyMatrix4(matrices[vertex.joints[slot]]).multiplyScalar(vertex.weights[slot]));
+    lowest = Math.min(lowest, point.y);
+  }
+  return lowest;
+};
+const standingFloor = skinnedMinimumY(targetIdle);
+const groundFrame = (frame, planted) => {
+  const minimum = skinnedMinimumY(frame);
+  const correction = planted ? standingFloor - minimum : Math.max(0, standingFloor - minimum);
+  // Solve in world Y on the skeleton root, leaving the scene's position/scale and floor fixed.
+  // Hair and ribbons are excluded from support; their ground collision belongs to later physics.
+  const root = target.nodes[target.names.get('全ての親')];
+  root.position.add(new THREE.Vector3(0, correction, 0).applyQuaternion(root.parent.getWorldQuaternion(new THREE.Quaternion()).invert()));
+  target.root.updateMatrixWorld(true);
+  return channel(target);
+};
 let lying;
 for (const name of ['side_lying', 'lie_down', 'get_up', 'treadmill_running']) {
   const motion = source.motions.find(candidate => candidate.name === name);
   const frames = motion.frames.map((frame, index) => {
     const seconds = index / 30;
     const support = name === 'side_lying' ? 1 : name === 'lie_down' ? THREE.MathUtils.smoothstep(seconds, 2.5, 6) : name === 'get_up' ? 1 - THREE.MathUtils.smoothstep(seconds, 1, 4) : 0;
-    let captured = retarget(frame, support);
+    let captured = groundFrame(retarget(frame, support), name !== 'treadmill_running');
     if (name === 'side_lying') return captured;
     const beginning = name === 'get_up' ? lying : targetIdle;
     const ending = name === 'lie_down' ? lying : targetIdle;
@@ -162,22 +206,6 @@ const regions = [{name: 'head', bone: '頭', radius: .1}, {name: 'left_hand', bo
 const touchFrames = Object.fromEntries(motions.map(motion => [motion.name, motion.frames.map(frame => {
   apply(target, frame); return regions.map(region => worldPosition(target, region.bone).toArray());
 })]));
-// Sample real linear-skinned vertices for fixed all-motion bounds, using this GLB's inverse binds.
-const accessor = index => {
-  const attribute = model.accessors[index], view = model.bufferViews[attribute.bufferView];
-  const widths = {SCALAR: 1, VEC3: 3, VEC4: 4, MAT4: 16};
-  const bytes = {5121: 1, 5123: 2, 5125: 4, 5126: 4}[attribute.componentType];
-  const method = {5121: 'getUint8', 5123: 'getUint16', 5125: 'getUint32', 5126: 'getFloat32'}[attribute.componentType];
-  const width = widths[attribute.type], stride = view.byteStride ?? width * bytes;
-  const buffer = new DataView(binary.buffer, binary.byteOffset, binary.byteLength);
-  return Array.from({length: attribute.count}, (_, row) => Array.from({length: width}, (_, column) => buffer[method]((view.byteOffset ?? 0) + (attribute.byteOffset ?? 0) + row * stride + column * bytes, true)));
-};
-const skin = model.skins[0];
-const inverse = accessor(skin.inverseBindMatrices).map(values => new THREE.Matrix4().fromArray(values));
-const vertices = model.meshes[0].primitives.filter((_, index) => index !== 11).flatMap(primitive => {
-  const positions = accessor(primitive.attributes.POSITION), joints = accessor(primitive.attributes.JOINTS_0), weights = accessor(primitive.attributes.WEIGHTS_0);
-  return positions.map((position, index) => ({position, joints: joints[index], weights: weights[index]}));
-});
 const bounds = new THREE.Box3();
 for (const motion of motions) {
   for (let index = 0; index < motion.frames.length; index += 15) {
@@ -197,10 +225,12 @@ const expressions = {normal: {}, happy: {happy: .65}, sad: {sad: .7}, angry: {an
 const animatedJoints = new Set([...mapping.keys(), ...desktop.motions.flatMap(motion => motion.frames[0].map(values => values[0])), ...targetIdle.filter((values, index) => values.some((value, axis) => Math.abs(value - targetRest[index][axis]) > 1e-7)).map(values => values[0])].filter(index => skin.joints.includes(index)));
 for (const motion of motions) motion.frames = motion.frames.map(frame => frame.filter(values => animatedJoints.has(values[0])));
 const payload = {frameRate: 30, motions, behavior: {expressions, touchRegions: regions, touchFrames},
-  posture: {floor: 0, bounds: {min: bounds.min.toArray(), max: bounds.max.toArray()}},
-  calibration: {model_sha256: digest, source_model_sha256: source.sha256, mappedJoints: mapping.size, heightRatio,
+  posture: {floor: standingFloor, bounds: {min: bounds.min.toArray(), max: bounds.max.toArray()}},
+  calibration: {model_sha256: digest, source_model_sha256: source.sha256, mappedJoints: mapping.size, heightRatio, standingFloor, sideSupportY: skinnedMinimumY(lying),
+    legSkinning: 'D chain and foot EX world retarget',
+    deformingLegJoints: Object.fromEntries(['足D.L', '足D.R', 'ひざD.L', 'ひざD.R', '足首D.L', '足首D.R', '足先EX.L', '足先EX.R'].map(name => [name, target.names.get(name)])), groundSupport: 'Skinned leg/torso/boot minimum Y, fixed standing floor',
     method: 'World quaternion deltas from model-specific idle, target-parent local conversion, CCD hand support and palm frames',
-    limitations: ['No realtime cloth or ground projection; AVP support/contact requires acceptance']}};
+    limitations: ['Body support calibrated; no realtime cloth or hair ground collision; AVP contact requires acceptance']}};
 fs.mkdirSync(path.dirname(outputPath), {recursive: true});
 fs.writeFileSync(outputPath, JSON.stringify(payload));
 console.log(JSON.stringify({motions: motions.map(motion => motion.name), calibration: payload.calibration, bounds: payload.posture.bounds}));

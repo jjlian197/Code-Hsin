@@ -1,6 +1,6 @@
 # Hsin visionOS 开发准备
 
-2026-10-08 更新。当前体积窗口基线为已安装的 Build 9；后续空间化 M1–M5 已加入计划，尚未实施。功能迁移状态见 [迁移进度](VISIONOS_PARITY_PLAN.md)，空间化任务与验收见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)。下文保留首版开发和各 Build 的历史记录，历史签名／功能缺项不代表当前状态。
+2026-10-08 更新。当前体积窗口推进至 Build 10：语音断句、爱弥斯蒙皮腿骨／地面修复及阶段 4 陪伴设置已实装并安装至 AVP；后续空间化 M1–M5 已加入计划，尚未实施。功能迁移状态见 [迁移进度](VISIONOS_PARITY_PLAN.md)，空间化任务与验收见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)。下文保留首版开发和各 Build 的历史记录，历史签名／功能缺项不代表当前状态。
 
 ## 已确认基础
 
@@ -62,4 +62,4 @@ PC：Qwen3-ASR + GPT-SoVITS（心 / 爱弥斯，中日文）
 
 ## 后续空间化路线（2026-10-08 纳入）
 
-按用户交接文档补充 M1–M5：Full Immersion 空间原型 → 虚拟环境 Alpha → Mixed Reality 基础 → 重建／遮挡／避障 Beta → 空间陪伴。M1 先按 A–E 顺序建立基线、沉浸壳层、三层角色实体与逐模型物理校准、4 m／1.5 m 移动控制、回归与调试探针；保留 Build 9 体积窗口和角色／语音功能。详见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)。本次只更新计划，里程碑均未实施。
+按用户交接文档补充 M1–M5：Full Immersion 空间原型 → 虚拟环境 Alpha → Mixed Reality 基础 → 重建／遮挡／避障 Beta → 空间陪伴。M1 先按 A–E 顺序建立基线、沉浸壳层、三层角色实体与逐模型物理校准、4 m／1.5 m 移动控制、回归与调试探针；保留 Build 10 体积窗口和角色／语音／陪伴功能。详见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)。本次只更新计划，里程碑均未实施。

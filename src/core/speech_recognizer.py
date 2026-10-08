@@ -4,6 +4,7 @@ import os
 import base64
 import json
 import threading
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ class SpeechRecognizer:
     def __init__(self, runtime: str | Path | None = None, remote_settings: dict[str, Any] | None = None) -> None:
         self._lock = threading.Lock()
         self._closed = False
+        self._remote_health_at: float | None = None
         self._qwen = None
         self._qwen_identity = None
         self._runtime = runtime
@@ -52,11 +54,16 @@ class SpeechRecognizer:
         warning = ""
         if provider == "remote":
             generation = self._remote.generation
-            self._remote.health(generation)
+            # Endpoint settings are immutable for this client. Keep a short identity lease
+            # across turns; every inference request still authenticates independently.
+            if self._remote_health_at is None or time.monotonic() - self._remote_health_at >= 60:
+                self._remote.health(generation)
+                self._remote_health_at = time.monotonic()
             response = json.loads(self._remote.request("/v1/stt", {
                 "audio_base64": base64.b64encode(audio).decode("ascii"),
                 "language": config.get("language", "zh"), "hotwords": hotwords(config)}, expected_generation=generation))
-            if not isinstance(response.get("text"), str):
+            if response.get("provider") != "remote-qwen" or not isinstance(response.get("text"), str):
+                self._remote_health_at = None
                 raise RuntimeError("PC 识别响应格式无效")
             return response["text"], "remote-qwen", ""
         if provider == "qwen":

@@ -27,6 +27,15 @@ struct SpeechActivityChecks {
             precondition(feed(0, frames: 45).count == 1)
             precondition(feed(0.04, frames: 1001).count == 1) // maximum utterance bound
         }
+        // Quiet ambient noise after speech must not prolong a turn to the 20-second limit.
+        var room = SpeechActivity()
+        for _ in 0..<50 { _ = room.consume(Array(repeating: 0.0004, count: 320), sampleRate: 16000) }
+        for _ in 0..<25 { _ = room.consume(Array(repeating: 0.05, count: 320), sampleRate: 16000) }
+        var endedAt: Int?
+        for frame in 1...40 {
+            if case .utterance = room.consume(Array(repeating: 0.0036, count: 320), sampleRate: 16000) { endedAt = frame; break }
+        }
+        precondition(endedAt != nil && Double(endedAt!) * 0.02 <= 0.60)
         var activity = SpeechActivity()
         _ = activity.consume([.nan, .infinity, -.infinity], sampleRate: 16000)
         _ = activity.consume([0], sampleRate: .nan)

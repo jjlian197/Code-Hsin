@@ -9,6 +9,7 @@ import io
 import json
 from pathlib import Path
 import re
+import time
 import uuid
 import wave
 from typing import Any, Callable
@@ -108,6 +109,7 @@ class HeadsetSession:
                 if selected_stt not in ("remote", "zhipu"):
                     raise ValueError("识别方式需要 PC 或智谱")
                 pcm = audio_pcm(command.get("audio_base64"))
+                recognition_started = time.monotonic()
                 try:
                     async with asyncio.timeout(90):
                         text, _, _ = await asyncio.to_thread(self.recognizer.transcribe, pcm,
@@ -115,7 +117,7 @@ class HeadsetSession:
                 except TimeoutError:
                     self.recognizer.cancel()
                     raise ValueError("识别超时，请检查语音服务或切换识别方式") from None
-                await self.emit("transcript", identity, text=text)
+                await self.emit("transcript", identity, text=text, recognition_seconds=round(time.monotonic() - recognition_started, 3))
             else:
                 text = command.get("text")
             if not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000:

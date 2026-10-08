@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import Foundation
 import RealityKit
@@ -81,6 +82,24 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var historyError = ""
     @Published private(set) var conversationMessages: [ConversationMessage] = []
     private var history = ConversationHistory(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Conversations"))
+    let care = CompanionCare()
+    @Published var displaySize = min(1.25, max(0.8, UserDefaults.standard.object(forKey: "displaySize") as? Double ?? 1)) {
+        didSet { UserDefaults.standard.set(displaySize, forKey: "displaySize") }
+    }
+    @Published var viewMode = UserDefaults.standard.string(forKey: "viewMode") ?? "full" {
+        didSet { UserDefaults.standard.set(viewMode, forKey: "viewMode") }
+    }
+    @Published var speechPause = min(1.2, max(0.4, UserDefaults.standard.object(forKey: "speechPause") as? Double ?? 0.55)) {
+        didSet { if speechPause != oldValue { stopSpeech(); UserDefaults.standard.set(speechPause, forKey: "speechPause") } }
+    }
+    @Published private(set) var recognitionTiming = ""
+    @Published private(set) var connectionDiagnostics = ""
+    @Published private(set) var checkingConnections = false
+    private var diagnosticTask: Task<Void, Never>?
+    private var recognitionStarted: Double?
+    private var presentation = CharacterPresentation()
+    private var presentationBaseOrientation = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private var manualExpressionUntil = 0.0
     @Published var expression = "normal"
     @Published var breathing = UserDefaults.standard.object(forKey: "breathing") as? Bool ?? true {
         didSet { UserDefaults.standard.set(breathing, forKey: "breathing"); if modelReady && isIdle { _ = playMotion("idle") } }
@@ -124,6 +143,12 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         importInstalledConnection()
         chatProvider = UserDefaults.standard.string(forKey: "chatProvider." + selectedCharacter) ?? "default"
         selectHistory()
+        care.select(selectedCharacter, uptime: uptime)
+        care.onNotice = { [weak self] _, sound in
+            guard let self else { return }
+            // A notification sound must not become another utterance in a voice session.
+            if sound && !self.voiceSessionActive && !self.busy && !self.isListening { AudioServicesPlaySystemSound(1013) }
+        }
         behavior.interact(at: uptime)
         recorder.onLimit = { [weak self] in self?.finishRecording() }
         recorder.onSpeech = { [weak self] in self?.noteInteraction() }
@@ -133,6 +158,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func changeCharacter() {
         modelGeneration += 1
         modelReady = false
+        care.select(selectedCharacter, uptime: uptime)
         stopSpeech()
         resetPosture()
         expression = "normal"
@@ -243,9 +269,14 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             loaded.scale = SIMD3<Float>(repeating: 0.35)
             loaded.position = SIMD3<Float>(0, -0.53, 0)
             let motionDirectory = directory.map { $0 + "/Motions" } ?? "Motions"
+            presentation = CharacterPresentation()
+            presentationBaseOrientation = loaded.orientation
             if let envelopeURL = Bundle.main.url(forResource: "posture", withExtension: "json", subdirectory: motionDirectory),
                let envelope = try? JSONDecoder().decode(PostureEnvelope.self, from: Data(contentsOf: envelopeURL)) {
-                envelope.place(loaded)
+                if envelope.bounds.min.count == 3 && envelope.bounds.max.count == 3 && (envelope.bounds.min + envelope.bounds.max).allSatisfy({ $0.isFinite }) {
+                    presentation.minimum = SIMD3<Float>(envelope.bounds.min[0], envelope.bounds.min[1], envelope.bounds.min[2])
+                    presentation.maximum = SIMD3<Float>(envelope.bounds.max[0], envelope.bounds.max[1], envelope.bounds.max[2])
+                }
             }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("--face-closeup") {
@@ -461,19 +492,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         struct Bounds: Decodable { let min: [Float]; let max: [Float] }
         let floor: Float
         let bounds: Bounds
-        @MainActor func place(_ entity: Entity) {
-            guard bounds.min.count == 3, bounds.max.count == 3, floor.isFinite,
-                  (bounds.min + bounds.max).allSatisfy({ $0.isFinite }) else { return }
-            let low = SIMD3<Float>(bounds.min[0], bounds.min[1], bounds.min[2])
-            let high = SIMD3<Float>(bounds.max[0], bounds.max[1], bounds.max[2])
-            let extent = high - low
-            guard extent.x > 0, extent.y > 0, extent.z > 0 else { return }
-            // One fit for the entire path; never resize or move the floor during transitions.
-            let scale = min(0.35, 0.85 / extent.x, 1.05 / extent.y, 0.70 / extent.z)
-            entity.scale = SIMD3<Float>(repeating: scale)
-            entity.position = SIMD3<Float>(-(low.x + high.x) * scale / 2, -(low.y + high.y) * scale / 2,
-                                          -(low.z + high.z) * scale / 2)
-        }
+
     }
 
     #if DEBUG
@@ -496,6 +515,14 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         look("look_right")
         if arguments.contains("--interaction-probe-running") {
             gesture("treadmill_running", label: "跑步")
+            if let marker = arguments.first(where: { $0.hasPrefix("--interaction-probe-running-phase=") }),
+               let fraction = Double(marker.dropFirst("--interaction-probe-running-phase=".count)) {
+                postureProbeTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled, let self, let playback = self.motionPlayback else { return }
+                    playback.pause(); playback.time = playback.duration * min(1, max(0, fraction))
+                }
+            }
         } else if arguments.contains("--interaction-probe-rest") {
             behavior.interact(at: uptime - 600)
             postureProbeTask = Task { [weak self] in
@@ -583,6 +610,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             finishMotion(playback)
         }
         updateTouchTargets()
+        updatePresentation()
+        care.tick(uptime: uptime, engaged: busy)
         let monotonic = uptime
         if behavior.shouldRest(at: monotonic, enabled: automaticRest, visible: sceneVisible, ready: modelReady && canChangePosture,
                                busy: busy, idle: isIdle, standing: posture.phase == .standing) {
@@ -625,7 +654,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             blink = 0
         }
         #endif
-        var overlay = behaviorResources?.expressions[expression] ?? (expression == "content" ? ["smile": 0.65] : [:])
+        let chosenExpression = care.mood.autoExpression && uptime >= manualExpressionUntil ? care.mood.expression : expression
+        var overlay = behaviorResources?.expressions[chosenExpression] ?? (chosenExpression == "content" ? ["smile": 0.65] : [:])
         if monotonic < behavior.touchUntil {
             for (name, value) in behaviorResources?.expressions[behavior.touchPart == "chest" ? "blush" : "happy"] ?? ["smile": 0.5] {
                 overlay[name] = max(overlay[name] ?? 0, value)
@@ -642,7 +672,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 for (index, name) in entry.weightNames.enumerated() {
                     let manual = faceOverlay[name] ?? 0
                     if name == "blink" {
-                        updated.weights[index] = max(manual, (expression == "wink" ? 0 : blink) * (selectedCharacter == "hsin" ? 1 : 1.12))
+                        updated.weights[index] = max(manual, (chosenExpression == "wink" ? 0 : blink) * (selectedCharacter == "hsin" ? 1 : 1.12))
                     } else if SpeechMouthTimeline.vowels.contains(name), player != nil {
                         updated.weights[index] = mouthWeights[name] ?? 0
                     } else { updated.weights[index] = max(manual, mouthWeights[name] ?? 0) }
@@ -682,6 +712,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard availableExpressions.contains(name) else { return }
         noteInteraction(wake: false)
         expression = name
+        manualExpressionUntil = uptime + 45
     }
 
     func look(_ direction: String) {
@@ -695,6 +726,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let part = String(entity.name.dropFirst("HsinTouch_".count))
         let wasResting = behavior.restRequested
         guard behavior.touch(part, at: uptime) else { return }
+        care.interact("touch", part: part, uptime: uptime)
         if wasResting { requestPosture(lying: false); return }
         // A touch never forces a manually selected full-body pose to exit.
         guard posture.phase == .standing, !busy, activeMotion != "treadmill_running" else { return }
@@ -710,6 +742,54 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let frame = frames[min(frames.count - 1, Int(seconds * 30))]
         for (target, position) in zip(touchTargets, frame) where position.count == 3 {
             target.position = SIMD3<Float>(position[0], position[1], position[2])
+        }
+    }
+
+    private func updatePresentation() {
+        guard let character, modelReady else { return }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--face-closeup") { return }
+        #endif
+        presentation.size = Float(displaySize)
+        // Show the full support path during transitions, then restore the chosen close view.
+        presentation.mode = posture.phase == .lyingDown || posture.phase == .gettingUp ? "full" :
+            (["full", "head_front", "head_left", "head_right"].contains(viewMode) ? viewMode : "full")
+        let head = touchTargets.first?.position
+        let desired = presentation.pose(head: head)
+        let fraction: Float = 0.12
+        character.scale += (SIMD3<Float>(repeating: desired.scale) - character.scale) * fraction
+        character.position += (desired.position - character.position) * fraction
+        character.orientation = simd_slerp(character.orientation, simd_quatf(angle: desired.yaw, axis: SIMD3<Float>(0, 1, 0)) * presentationBaseOrientation, fraction)
+    }
+
+    func checkConnections() {
+        guard !checkingConnections else { return }
+        checkingConnections = true
+        connectionDiagnostics = "正在检查连接"
+        let pcAddress = bridgeURL, macAddress = gatewayURL, pcToken = bridgeToken, macToken = gatewayToken, role = selectedCharacter
+        diagnosticTask = Task { [weak self] in
+            guard let self else { return }
+            defer { checkingConnections = false; diagnosticTask = nil }
+            var lines: [String] = []
+            for (label, address, token, service) in [("PC 语音", pcAddress, pcToken, "hsin-pc-voice"), ("Mac 对话", macAddress, macToken, "hsin-vision-gateway")] {
+                let started = uptime
+                do {
+                    guard !token.isEmpty else { throw BridgeError.message("缺少访问令牌") }
+                    let base = try endpoint(address, allowLocal: service == "hsin-vision-gateway")
+                    var probe = try request(base, path: "health", token: token); probe.timeoutInterval = 8
+                    let bytes = try await perform(probe)
+                    guard let health = try JSONSerialization.jsonObject(with: bytes) as? [String: Any], health["service"] as? String == service, health["protocol"] as? Int == 1 else { throw BridgeError.message("服务身份或协议不匹配") }
+                    if service == "hsin-pc-voice" {
+                        guard let voices = health["voices"] as? [String: Any], voices[role] != nil else { throw BridgeError.message("当前角色音色缺失") }
+                    }
+                    lines.append(String(format: "%@：已连接（%.2f 秒）", label, uptime - started))
+                } catch {
+                    if let known = error as? BridgeError { lines.append(label + "：" + known.localizedDescription) }
+                    else { lines.append(label + "：连接失败或超时") }
+                }
+            }
+            guard pcAddress == bridgeURL, macAddress == gatewayURL, pcToken == bridgeToken, macToken == gatewayToken, role == selectedCharacter else { connectionDiagnostics = "配置已改变，请重新检查"; return }
+            connectionDiagnostics = lines.joined(separator: "\n") + "\n连接检查不代表推理或播放已验收"
         }
     }
 
@@ -836,6 +916,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let audio_base64: String?
         let audio_error: String?
         let error: String?
+        let recognition_seconds: Double?
     }
 
     private func connectGateway() async throws {
@@ -934,6 +1015,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard event.turn_id == gatewayTurn, gatewayTurn != nil else { return }
         switch event.type {
         case "transcript":
+            if let started = recognitionStarted {
+                let total = max(0, uptime - started)
+                recognitionTiming = String(format: "提交到转写 %.2f 秒", total)
+                if let server = event.recognition_seconds { recognitionTiming += String(format: " · 网关识别 %.2f 秒", server) }
+                NSLog("[HsinVision] STT completion %.3f seconds, provider %@", total, sttProvider)
+                recognitionStarted = nil
+            }
             transcript = event.text ?? ""
             if let turn = gatewayTurn { updateHistory { try $0.user(transcript, turn: turn) } }
             noteInteraction()
@@ -969,6 +1057,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             turnWatchdog?.cancel()
             turnWatchdog = nil
             turnFinished = true
+            if let turn = gatewayTurn { care.interact("chat", turn: turn, uptime: uptime) }
             fullReply = event.reply ?? fullReply
             if let turn = gatewayTurn { updateHistory { try $0.reply(fullReply, turn: turn, complete: true) } }
             if player == nil && pendingAudio.isEmpty { busy = false; status = "回复完成"; resumeVoiceWhenReady() }
@@ -1045,7 +1134,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 try await connectGateway()
                 try Task.checkCancellation()
                 guard turn == generation else { return }
-                try await recorder.start(continuous: voiceSessionActive)
+                try await recorder.start(continuous: voiceSessionActive, pauseSeconds: speechPause)
                 // A stale completion must not cancel a newer capture after stop/switch.
                 guard turn == generation else { return }
                 busy = false
@@ -1084,6 +1173,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         isListening = false
         do {
             let audio = try recorder.finish()
+            recognitionStarted = uptime
+            recognitionTiming = ""
             beginConversation(["type": "user_audio", "audio_base64": audio.base64EncodedString()])
         } catch { stopSpeech(); status = "未收到有效录音，请检查麦克风" }
     }
@@ -1099,6 +1190,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         recordingTask?.cancel()
         recordingTask = nil
         recorder.cancel()
+        recognitionStarted = nil
         isListening = false
         gatewayTurn = nil
         if disconnect {
@@ -1172,9 +1264,10 @@ private final class MicrophoneRecorder {
     private var continuous = false
     var onFailure: ((String) -> Void)?
 
-    func start(continuous: Bool = false) async throws {
+    func start(continuous: Bool = false, pauseSeconds: Double = 0.55) async throws {
         cancel()
         self.continuous = continuous
+        activity.pauseSeconds = pauseSeconds
         guard await AVAudioApplication.requestRecordPermission() else { throw CaptureError.permission }
         try Task.checkCancellation()
         let input = engine.inputNode

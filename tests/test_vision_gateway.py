@@ -109,7 +109,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(Backend.instances[1].configuration['persona'].startswith('aemeath persona'))
         for index, provider in enumerate(('remote','zhipu'),3):
             events=await self.turn(socket,str(index)*32,type='user_audio',audio_base64=base64.b64encode(recording()).decode(),stt_provider=provider)
-            self.assertEqual(next(event['text'] for event in events if event['type']=='transcript'),provider+'录音')
+            transcript = next(event for event in events if event['type']=='transcript')
+            self.assertEqual(transcript['text'], provider+'录音')
+            self.assertGreaterEqual(transcript['recognition_seconds'], 0)
         await socket.close()
     async def test_interrupt_revokes_old_turn_and_next_turn_recovers(self) -> None:
         socket = await self.connect()

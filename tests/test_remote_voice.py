@@ -147,6 +147,26 @@ class RemoteVoiceTests(unittest.TestCase):
         finally:
             recognizer.close()
 
+    def test_recognition_identity_lease_expires_and_bad_response_invalidates_it(self) -> None:
+        recognizer = SpeechRecognizer(self.root, self.settings)
+        try:
+            with patch.object(recognizer._remote, "health", wraps=recognizer._remote.health) as health:
+                recognizer.transcribe(bytes(640), {"provider": "remote"})
+                recognizer.cancel()
+                recognizer.transcribe(bytes(640), {"provider": "remote"})
+                self.assertEqual(health.call_count, 1)
+                recognizer._remote_health_at = time.monotonic() - 61
+                recognizer.transcribe(bytes(640), {"provider": "remote"})
+                self.assertEqual(health.call_count, 2)
+                with patch.object(self.backend, "transcribe", return_value={"provider": "other", "text": "bad"}):
+                    with self.assertRaisesRegex(RuntimeError, "格式"):
+                        recognizer.transcribe(bytes(640), {"provider": "remote"})
+                self.assertIsNone(recognizer._remote_health_at)
+                recognizer.transcribe(bytes(640), {"provider": "remote"})
+                self.assertEqual(health.call_count, 3)
+        finally:
+            recognizer.close()
+
     def test_voice_cache_isolated_by_server_fingerprint(self) -> None:
         voice = RemoteSynthesizer(self.settings, self.root)
         try:
