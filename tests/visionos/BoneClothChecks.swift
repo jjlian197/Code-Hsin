@@ -84,6 +84,39 @@ struct BoneClothChecks {
             precondition(solver.maximumChestAngle < 0.001)
             print("Chest acceleration, angle limit, auxiliary follow, settling and reset passed at \(rate) Hz; peak \(peak)")
         }
+        // A moving garment should lag more than hair under the same anchor motion.
+        func response(_ material: ClothConfiguration.Material) -> Float {
+            let config = ClothConfiguration(version: configuration.version, sourceSHA256: configuration.sourceSHA256, floor: configuration.floor,
+                joints: configuration.joints, nodes: configuration.nodes.map { .init(joint: $0.joint, parent: $0.parent, limit: $0.limit, radius: $0.radius, material: material) },
+                links: configuration.links, colliders: configuration.colliders, postGrants: [])
+            var solver = BoneCloth(configuration: config), accumulated: Float = 0
+            for frame in 0..<720 {
+                let base = pose(Float(frame) / 120), solved = solver.update(base, delta: 1.0 / 120)
+                precondition(solved.allSatisfy(\.finite))
+                if frame > 240 {
+                    accumulated += simd_distance(base[0].child(base[1]).child(base[2]).position, solved[0].child(solved[1]).child(solved[2]).position)
+                }
+            }
+            return accumulated / 479
+        }
+        let hairLag = response(.hair), garmentLag = response(.garment)
+        precondition(garmentLag > hairLag * 1.2)
+        print("Material response: hair \(hairLag), garment \(garmentLag)")
+        // Entering a fixed body volume must not reduce its exclusion radius.
+        let bodyContact = ClothConfiguration(version: configuration.version, sourceSHA256: configuration.sourceSHA256, floor: configuration.floor,
+            joints: configuration.joints, nodes: configuration.nodes, links: configuration.links,
+            colliders: [.init(a: 0, b: 0, radius: 0.06)], postGrants: [])
+        var contactSolver = BoneCloth(configuration: bodyContact)
+        var contactPose = pose(0)
+        for frame in 0..<360 {
+            contactPose[2].position = frame < 120 ? SIMD3(-0.05, -0.01, 0) : SIMD3(-0.07, -0.005, 0)
+            let solved = contactSolver.update(contactPose, delta: 1.0 / 120)
+            let freePoint = solved[0].child(solved[1]).child(solved[2]).position
+            if frame > 90 { precondition(simd_distance(freePoint, solved[0].position) >= 0.068 - 1e-5) }
+            precondition(solved.allSatisfy(\.finite) && solved[0].position == contactPose[0].position)
+        }
+        precondition(contactSolver.collisionCorrections > 0)
+        print("Fixed body volume, deeper target penetration and finite contact passed")
         if CommandLine.arguments.count > 1 {
             for path in CommandLine.arguments.dropFirst() {
                 let bytes = try Data(contentsOf: URL(fileURLWithPath: path))

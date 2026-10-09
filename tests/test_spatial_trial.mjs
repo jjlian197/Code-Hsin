@@ -24,6 +24,8 @@ for (const path of process.argv.slice(2)) {
     assert.deepEqual(spring.tip, sample.bones.find(bone => bone.name === chestName + '先').position);
     assert(spring.limitAngle > 0 && spring.limitAngle <= .3);
   }
+  assert.equal(sample.physics.colliders.length, 15);
+  assert(sample.physics.nodes.every(node => ['hair', 'garment'].includes(node.material)));
   const simulated = new Set(sample.physics.nodes.map(node => sample.physics.joints[node.joint].bone));
   assert(!simulated.has('左胸') && !simulated.has('右胸'));
   assert(!simulated.has('センター') && !simulated.has('上半身'));

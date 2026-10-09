@@ -70,6 +70,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     var canChangePosture: Bool { ["lie_down", "side_lying", "get_up"].allSatisfy { motions[$0] != nil } }
     private var motionCompletion: EventSubscription?
     private var physicsSubscription: EventSubscription?
+    private var staticPhysicsSubscription: EventSubscription?
     private var realtimeCloth: RealityCloth?
     @Published var clothPhysics = UserDefaults.standard.object(forKey: "clothPhysics") as? Bool ?? true {
         didSet { if clothPhysics != oldValue { realtimeCloth?.reset(); UserDefaults.standard.set(clothPhysics, forKey: "clothPhysics") } }
@@ -266,7 +267,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         let requestedResource = modelResource
         let directory = resourceDirectory
         modelReady = false
-        physicsSubscription?.cancel(); physicsSubscription = nil; realtimeCloth = nil
+        physicsSubscription?.cancel(); physicsSubscription = nil; staticPhysicsSubscription?.cancel(); staticPhysicsSubscription = nil; realtimeCloth = nil
         #if DEBUG
         physicsProbeTask?.cancel(); physicsProbeTask = nil; physicsToggleStates = []
         #endif
@@ -352,20 +353,21 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 let configuration = try JSONDecoder().decode(ClothConfiguration.self, from: Data(contentsOf: physicsURL))
                 realtimeCloth = RealityCloth(character: loaded, configuration: configuration)
                 physicsStatus = realtimeCloth == nil ? "衣发骨架或配置不匹配，未启用物理" : "实时衣发已就绪"
-                physicsSubscription = content.subscribe(to: AnimationEvents.SkeletalPoseUpdateComplete.self) { [weak self] event in
-                    // Defer only off-main events: enqueueing every pose write can miss the
-                    // current animation/render phase. The main-thread path writes synchronously.
-                    if Thread.isMainThread {
-                        MainActor.assumeIsolated {
-                            guard let self, requestedGeneration == self.modelGeneration else { return }
-                            self.advancePhysics(delta: event.deltaTime)
-                        }
-                    } else {
-                        Task { @MainActor [weak self] in
-                            guard let self, requestedGeneration == self.modelGeneration else { return }
-                            self.advancePhysics(delta: event.deltaTime)
-                        }
+                let receivePhysics: @Sendable (Float, Bool) -> Void = { [weak self] delta, staticFrame in
+                    let apply: @MainActor () -> Void = { [weak self] in
+                        guard let self, requestedGeneration == self.modelGeneration else { return }
+                        if staticFrame { self.advanceStaticPhysics(delta: Double(delta)) }
+                        else { self.advancePhysics(delta: delta) }
                     }
+                    // Keep pose writes in the current rendering phase when already on main.
+                    if Thread.isMainThread { MainActor.assumeIsolated { apply() } }
+                    else { Task { @MainActor in apply() } }
+                }
+                physicsSubscription = content.subscribe(to: AnimationEvents.SkeletalPoseUpdateComplete.self) { event in
+                    receivePhysics(event.deltaTime, false)
+                }
+                staticPhysicsSubscription = content.subscribe(to: SceneEvents.Update.self) { event in
+                    receivePhysics(Float(event.deltaTime), true)
                 }
             } else { physicsStatus = "当前资源未包含实时衣发配置" }
             modelReady = true
@@ -395,8 +397,13 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                     } catch { status = "测试音频失败" }
                 }
             }
-            if ProcessInfo.processInfo.arguments.contains("--physics-probe-toggle") {
+            if ProcessInfo.processInfo.arguments.contains("--physics-probe-toggle") || ProcessInfo.processInfo.arguments.contains("--physics-probe-rest-toggle") {
                 physicsProbeTask = Task { [weak self] in
+                    if ProcessInfo.processInfo.arguments.contains("--physics-probe-rest-toggle") {
+                        while !Task.isCancelled, let self, self.posture.phase != .sideLying {
+                            try? await Task.sleep(for: .milliseconds(100))
+                        }
+                    }
                     try? await Task.sleep(for: .seconds(2))
                     guard !Task.isCancelled, let self, requestedGeneration == self.modelGeneration else { return }
                     self.clothPhysics = false
@@ -445,6 +452,8 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             status = "动作不可用：\(name)"
             return false
         }
+        if name == "side_lying" { realtimeCloth?.beginStaticPose() }
+        else { realtimeCloth?.leaveStaticPose() }
         // Separately imported skeleton clips need the direct handoff used by the reference renderer.
         // Stopping the previous controller after starting the new one can restore the bind pose.
         motionPlayback = root.playAnimation(["idle", "idle_breathing", "side_lying"].contains(name) ? animation.repeat() : animation,
@@ -835,7 +844,15 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func advancePhysics(delta: Float) {
-        realtimeCloth?.update(delta: delta, enabled: clothPhysics && sceneVisible && modelReady)
+        realtimeCloth?.update(delta: delta, enabled: clothPhysics && sceneVisible && modelReady, staticPose: activeMotion == "side_lying")
+        reportPhysics(delta: delta)
+    }
+    private func advanceStaticPhysics(delta: Double) {
+        guard activeMotion == "side_lying" else { realtimeCloth?.leaveStaticPose(); return }
+        realtimeCloth?.advanceStaticFrame(delta: delta, enabled: clothPhysics && sceneVisible && modelReady)
+        reportPhysics(delta: Float(delta))
+    }
+    private func reportPhysics(delta: Float) {
         if uptime - lastPhysicsReport >= 1 {
             physicsStatus = realtimeCloth?.status ?? physicsStatus; lastPhysicsReport = uptime
         }

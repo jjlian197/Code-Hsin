@@ -3,7 +3,8 @@ import simd
 
 struct ClothConfiguration: Codable {
     struct Joint: Codable { let name: String; let bone: String; let parent: Int }
-    struct Node: Codable { let joint: Int; let parent: Int; let limit: Float; let radius: Float }
+    enum Material: String, Codable { case hair, garment }
+    struct Node: Codable { let joint: Int; let parent: Int; let limit: Float; let radius: Float; var material: Material? = nil }
     struct Link: Codable { let a: Int; let b: Int; let stiffness: Float }
     struct Collider: Codable { let a: Int; let b: Int; let radius: Float }
     struct ChestSpring: Codable { let joint: Int; let tip: [Float]; let limitAngle: Float }
@@ -52,6 +53,13 @@ struct BoneCloth {
     private let validConfiguration: Bool
     private let nodeForJoint: [Int]
     private let children: [[Int]]
+    private struct Profile {
+        let follow: Float; let damping: Double; let restoring: Double
+        static let hair = Profile(follow: 0.65, damping: 7, restoring: 2.4)
+        static let garment = Profile(follow: 0.5, damping: 5.5, restoring: 0.6)
+    }
+    private let profiles: [Profile]
+    private let linkStiffness: [Float]
     private var points: [SIMD3<Float>] = []
     private var previous: [SIMD3<Float>] = []
     private var lastTargets: [SIMD3<Float>] = []
@@ -78,6 +86,19 @@ struct BoneCloth {
             }
         }
         nodeForJoint = mapping; children = descendants
+        // Old version-1 resources retain a name-based fallback; new exports label material.
+        let materials = configuration.nodes.map { node -> ClothConfiguration.Material in
+            if let material = node.material { return material }
+            let name = configuration.joints.indices.contains(node.joint) ? configuration.joints[node.joint].bone : ""
+            return ["Hair", "Daimao", "髪", "髮", "发"].contains(where: name.contains) ? .hair : .garment
+        }
+        profiles = materials.map { $0 == .hair ? .hair : .garment }
+        linkStiffness = configuration.links.map { link in
+            guard configuration.nodes.indices.contains(link.a), configuration.nodes.indices.contains(link.b) else { return link.stiffness }
+            let chain = configuration.nodes[link.b].parent == link.a || configuration.nodes[link.a].parent == link.b
+            // Keep chain length rigid; only garment cross-links loosen to permit local bending.
+            return !chain && (materials[link.a] == .garment || materials[link.b] == .garment) ? min(link.stiffness, 0.25) : link.stiffness
+        }
     }
     mutating func reset() { points = []; previous = []; lastTargets = []; accumulator = 0; age = 0; chestPoints = []; chestPrevious = []; chestTargets = []; maximumChestAngle = 0 }
     private func worlds(_ local: [ClothTransform]) -> [ClothTransform] {
@@ -101,18 +122,27 @@ struct BoneCloth {
         let limit = max(node.limit, configuration.floor + node.radius - targets[index].y + 0.02)
         if length > limit { points[index] = targets[index] + offset * (limit / length) }
         if collide {
-            for collider in configuration.colliders {
-                let start = body[collider.a].position, end = body[collider.b].position
-                let restDistance = simd_distance(targets[index], nearest(targets[index], start, end))
-                // Preserve the asset's original close-fitting clearance rather than inflating clothes.
-                let radius = min(collider.radius + node.radius, max(node.radius, restDistance - 0.002))
-                let contact = nearest(points[index], start, end)
-                offset = points[index] - contact
-                if simd_length_squared(offset) < radius * radius {
-                    if simd_length_squared(offset) < 1e-10 { offset = targets[index] - contact }
-                    if simd_length_squared(offset) < 1e-10 { offset = SIMD3<Float>(0, 0, 1) }
-                    points[index] = contact + simd_normalize(offset) * radius
-                    collisionCorrections += 1
+            // Fixed body volumes must not shrink when an animated garment target enters
+            // the body. Two passes handle adjacent/overlapping anatomical capsules.
+            for _ in 0..<2 {
+                for collider in configuration.colliders {
+                    let start = body[collider.a].position, end = body[collider.b].position
+                    let radius = collider.radius + node.radius
+                    let contact = nearest(points[index], start, end)
+                    offset = points[index] - contact
+                    if simd_length_squared(offset) < radius * radius {
+                        if simd_length_squared(offset) < 1e-10 { offset = targets[index] - contact }
+                        if simd_length_squared(offset) < 1e-10 { offset = SIMD3<Float>(0, 0, 1) }
+                        let normal = simd_normalize(offset), before = points[index]
+                        points[index] = contact + normal * radius
+                        // Preserve tangential travel, remove inward velocity and add light
+                        // contact friction rather than turning a projection into a bounce.
+                        previous[index] += points[index] - before
+                        let velocity = points[index] - previous[index]
+                        previous[index] += normal * min(0, simd_dot(velocity, normal))
+                        previous[index] += (velocity - normal * simd_dot(velocity, normal)) * 0.015
+                        collisionCorrections += 1
+                    }
                 }
             }
         }
@@ -131,7 +161,7 @@ struct BoneCloth {
         for index in targets.indices {
             // Free particles retain world-space inertia; following 92% of every animated
             // target shift erased nearly all running acceleration before the solver saw it.
-            let shift = (targets[index] - lastTargets[index]) * 0.65
+            let shift = (targets[index] - lastTargets[index]) * profiles[index].follow
             points[index] += shift; previous[index] += shift
             if configuration.nodes[index].parent < 0 { points[index] = targets[index]; previous[index] = targets[index] }
         }
@@ -153,8 +183,9 @@ struct BoneCloth {
         let lengths = configuration.links.map { simd_distance(targets[$0.a], targets[$0.b]) }
         var substeps = 0
         while accumulator >= timestep && substeps < 8 {
-            let damping = Float(exp(-7 * timestep)), shape = Float(1 - exp(-2.4 * timestep))
             for index in points.indices where configuration.nodes[index].parent >= 0 {
+                let damping = Float(exp(-profiles[index].damping * timestep))
+                let shape = Float(1 - exp(-profiles[index].restoring * timestep))
                 let velocity = (points[index] - previous[index]) * damping
                 previous[index] = points[index]
                 points[index] += velocity + SIMD3<Float>(0, -2.2 * Float(timestep * timestep), 0)
@@ -178,7 +209,7 @@ struct BoneCloth {
                     let a: Float = configuration.nodes[link.a].parent < 0 ? 0 : 1
                     let b: Float = configuration.nodes[link.b].parent < 0 ? 0 : 1
                     if length < 1e-7 || a + b == 0 { continue }
-                    let correction = offset * ((length - lengths[slot]) / length / (a + b) * link.stiffness)
+                    let correction = offset * ((length - lengths[slot]) / length / (a + b) * linkStiffness[slot])
                     points[link.a] += correction * a; points[link.b] -= correction * b
                 }
                 for index in points.indices { project(index, targets: targets, body: body, collide: iteration == 3) }

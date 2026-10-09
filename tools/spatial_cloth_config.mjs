@@ -17,8 +17,11 @@ export function spatialClothConfig(definitions, indices, dynamicIndices, seams, 
   const dynamic = new Set(dynamicIndices.filter(index => included.has(index) && clothBone(definitions[index].name)));
   const movable = ordered.filter(index => dynamic.has(index));
   const particle = new Map(movable.map((index, slot) => [index, slot]));
-  const nodes = movable.map(index => ({joint: ordinal.get(index), parent: particle.get(definitions[index].parent) ?? -1,
-    limit: /Hair|髪|髮|发|Daimao/.test(definitions[index].name) ? .12 : .18, radius: .008}));
+  const nodes = movable.map(index => {
+    const hair = /Hair|髪|髮|发|Daimao/.test(definitions[index].name);
+    return {joint: ordinal.get(index), parent: particle.get(definitions[index].parent) ?? -1,
+      limit: hair ? .12 : .18, radius: .008, material: hair ? 'hair' : 'garment'};
+  });
   const links = nodes.flatMap((node, slot) => node.parent < 0 ? [] : [{a: node.parent, b: slot, stiffness: 1}]);
   const linked = new Set(links.map(link => [link.a, link.b].sort((a, b) => a - b).join(':')));
   for (const [left, right] of seams) {
@@ -32,8 +35,10 @@ export function spatialClothConfig(definitions, indices, dynamicIndices, seams, 
     pairs.push([[prefix + '足', '足D' + suffix], [prefix + 'ひざ', 'ひざD' + suffix], .065],
       [[prefix + 'ひざ', 'ひざD' + suffix], [prefix + '足首', '足首D' + suffix], .045],
       [[prefix + '腕', '腕' + suffix], [prefix + 'ひじ', 'ひじ' + suffix], .03],
-      [[prefix + 'ひじ', 'ひじ' + suffix], [prefix + '手首', '手首' + suffix], .025]);
+      [[prefix + 'ひじ', 'ひじ' + suffix], [prefix + '手首', '手首' + suffix], .025],
+      [[prefix + '胸', '胸上' + suffix], [prefix + '胸先', '胸先' + suffix], .035]);
   }
+  pairs.push([['左足', '足D.L'], ['右足', '足D.R'], .065]);
   const colliders = pairs.flatMap(([a, b, radius]) => {
     const left = find(...a), right = find(...b);
     return left === undefined || right === undefined ? [] : [{a: ordinal.get(left), b: ordinal.get(right), radius}];
