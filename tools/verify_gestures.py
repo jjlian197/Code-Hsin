@@ -1,5 +1,6 @@
 """真实 Qt/PMX 双形态手势检查与正面/侧面近景；不联网、不开麦。"""
 import asyncio
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import tempfile
@@ -13,6 +14,9 @@ from tools.verify_behavior import GuiProbe
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--character', help='检查指定PMX角色包，不修改日常角色设置')
+    args = parser.parse_args()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(["verify_gestures"])
     app.setQuitOnLastWindowClosed(False)
@@ -36,8 +40,8 @@ def main():
         }})()"""))
 
     async def verify():
-        for form in ("first", "second"):
-            await probe.call(lambda f: (window.set_model_form(form), f.set_result(None)))
+        for form in (("aemeath",) if args.character else ("first", "second")):
+            await probe.call(lambda f: (window.sprite_view.load_character(project_path(args.character)) if args.character else window.set_model_form(form), f.set_result(None)))
             for _ in range(500):
                 if await probe.call(lambda f: f.set_result(window.sprite_view.model_loaded)):
                     break
@@ -50,6 +54,17 @@ def main():
             await probe.evaluate("window.__gestureClock=performance.now();window.HsinPmx.tick(window.__gestureClock);")
             for physics in (False, True):
                 await probe.evaluate(f"window.HsinPmx.setPhysics({str(physics).lower()});")
+                if args.character:
+                    for name in ('nod', 'wave', 'peace'):
+                        await probe.call(lambda f, n=name: (window._motion_actions[n].trigger(), f.set_result(None)))
+                        state = await advance(45)
+                        assert state['motion'] == name, state
+                        if name != 'nod':
+                            assert state['right_palm_normal'][2] > .95, state
+                        assert json.loads(await probe.evaluate('JSON.stringify(window.HsinPmxDebug.rigGeometry());'))['finite']
+                        report['captures'].append(await probe.capture(f'gestures-{form}-{name}-{physics}-full'))
+                        assert (await advance(90))['motion'] == 'idle'
+                    assert not await probe.call(lambda f: f.set_result(window._motion_actions['side_lying'].isEnabled()))
                 for name in ("finger_heart", "crossed_arms"):
                     await probe.call(lambda f: (window._motion_actions[name].trigger(), f.set_result(None)))
                     state = await advance(60)
@@ -60,7 +75,8 @@ def main():
                         assert all(abs(x["corner"]-90)<.05 and max(sum(x["bends"], []))<.05 for x in geometry["lower"]), "真实骨架的下沿或直指偏离目标"
                     else:
                         left, right = geometry["points"]["左手首"], geometry["points"]["右手首"]
-                        assert left[0]<-1 and right[0]>1 and abs(left[2]-right[2])>.7, "X 手势位置或深度错误"
+                        span, depth = (.5, .4) if args.character else (1, .7)
+                        assert left[0]<-span and right[0]>span and abs(left[2]-right[2])>depth, "X 手势位置或深度错误"
                         assert state["right_palm_normal"][2]>.98, "X 手势掌面未朝前"
                     report["checks"].append({"form": form, "physics": physics, "motion": name, "geometry": geometry})
                     await asyncio.sleep(.3)
@@ -113,7 +129,7 @@ def main():
         window.hide()
         pool.shutdown(wait=True)
         temp.cleanup()
-    project_path(".runtime/gesture-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")
+    project_path(".runtime/aemeath-gesture-validation.json" if args.character else ".runtime/gesture-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")
     print(json.dumps({"success": report["success"], "checks": len(report["checks"]), "failures": report["failures"]}, ensure_ascii=False), flush=True)
     return 0 if report["success"] else 1
 

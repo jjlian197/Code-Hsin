@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import { createCalibratedGestures } from './calibrated_gestures.js';
 import {RIG_SCHEMA} from './rig/schema.js';
 import {HEART_POSE} from './heart_pose.js';
+import {gestureBones} from './gesture_bones.js';
 
-// 复杂手势只开放给已经验证的心双形态；标准骨名不能证明其他角色已校准。
+// 复杂手势只开放给已经验证的模型；标准骨名不能证明其他角色已校准。
 const calibratedModels = new Set([
   '4cf8454f7a79c84b88cf3dadfaca3fe2d55d3c6349fffd204acaf24dc78ea82e',
   'e766ffc90c5a69a06da2365232616b1b730d8ecfa08fe685d770da0c509b8471',
+  '79b622d0a87ab61516d2c3008d241d9145daa905acbcbd29d070c68cc55fa437',
+  '8b7294f38ace5dfae8ba65b400d4feb13897a1d15f828e285189fc56ef6f7854',
 ]);
 
 function rotationTrack(name, times, angles) {
@@ -42,15 +45,16 @@ export function createBuiltinClips(mesh, rig = null) {
   ]);
   const nod = new THREE.AnimationClip('nod', 1.6,
     track('頭', [0, 0.3, 0.6, 0.9, 1.2, 1.6], [[0], [0.18], [-0.04], [0.15], [0.02], [0]]));
+  const legacyNames=gestureBones(mesh);
   const legacyBones=[...HEART_POSE.map(p=>p.name),'上半身2','センター',
     ...['右','左'].flatMap(side=>['親','人','中','薬','小'].map(finger=>side+finger+'指先'))];
-  if (rig && (!calibratedModels.has(rig.report.model.sha256) || !rig.usesOriginalNames || !legacyBones.every(name=>names.has(name)))) {
+  if (rig && (!calibratedModels.has(rig.report.model.sha256) || !rig.usesOriginalNames || !legacyBones.every(name=>legacyNames.has(name)))) {
     nod.blendMode = THREE.AdditiveAnimationBlendMode;
     return nod.tracks.length ? {idle,nod} : {idle};
   }
   const wave = createWaveClip(mesh);
   nod.blendMode = wave.blendMode = THREE.AdditiveAnimationBlendMode;
-  return { idle, nod, wave, ...createGestureClips(mesh), ...createCalibratedGestures(mesh) };
+  return { idle, nod, wave, ...createGestureClips(mesh), ...createCalibratedGestures(mesh,rig) };
 }
 
 // 用真实手指方向建立掌面坐标系，避免把手腕某个欧拉轴误当作掌心方向。
@@ -127,7 +131,7 @@ function createWaveClip(mesh) {
 
 // 用真实关节位置求肩/肘方向，手指弯向掌心，不依赖模型局部轴猜测。
 function createGestureClips(mesh) {
-  const bones=new Map(mesh.skeleton.bones.map(b=>[b.name,b]));
+  const bones=gestureBones(mesh);
   const initial=new Map(mesh.skeleton.bones.map(b=>[b,b.quaternion.clone()]));
   const names=[...bones.keys()].filter(n=>/^[右左](腕|ひじ|手首|(親|人|中|薬|小)指[０１２３])$/.test(n));
   const update=()=>mesh.updateMatrixWorld(true);

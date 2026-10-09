@@ -4,6 +4,7 @@ import {Parser} from '../src/assets/pmx_viewer/lib/three/addons/libs/mmdparser.m
 import {analyzePmx} from './analyze_pmx_rig.mjs';
 import {renderPreview} from './rig/preview.mjs';
 import {validateMorphMap} from '../src/assets/pmx_viewer/rig/morphs.js';
+import {isAemeathChestModel} from '../src/assets/pmx_viewer/aemeath_physics.js';
 
 // 生成引用式本地角色包，不复制私有模型或修改源文件。
 const args=process.argv.slice(2),file=args.shift();
@@ -22,7 +23,7 @@ try {
     if(!fs.existsSync(target))throw new Error('贴图缺失：'+texture);return {source:texture,path:target};});
   const manifest={format:'hsin.character',version:1,name:options.name,
     model:{path:source,sha256:report.model.sha256,textures},rig:'rig_map.json',morphs:'morph_map.json',
-    capabilities:{motions:['idle','nod'],physics:data.rigidBodies.length>0}};
+    capabilities:{motions:isAemeathChestModel(report.model.sha256)?['idle','nod','wave','peace','finger_heart','crossed_arms','treadmill_running']:['idle','nod'],physics:data.rigidBodies.length>0}};
   const {skeleton,...rig}=report;
   const outputs={'character.json':manifest,'rig_map.json':rig,'morph_map.json':morphs,'report.json':report};
   for(const name of [...Object.keys(outputs),'preview.html']) {

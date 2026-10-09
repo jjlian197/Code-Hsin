@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--version', default='1.3.0')
+    parser.add_argument('--version', default='1.4.0')
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--installer', help='Inno Setup ISCC.exe 路径；从同一便携构建制作安装包')
     args = parser.parse_args()
@@ -37,6 +37,7 @@ def main():
     shutil.copyfile(ROOT / 'LICENSE', folder / 'LICENSE')
     shutil.copyfile(ROOT / 'docs/GPT_SOVITS_SETUP.md', folder / 'GPT-SoVITS部署说明.md')
     shutil.copyfile(ROOT / 'docs/CHARACTER_PACKAGES.md', folder / '角色管理说明.md')
+    shutil.copyfile(ROOT / 'docs/AEMEATH_CHEST_PHYSICS.md', folder / '爱弥斯动作与物理说明.md')
     shutil.copytree(ROOT / 'voice/config-templates', folder / 'voice/config-templates', dirs_exist_ok=True)
     (folder / 'portable.txt').write_text('Portable mode: settings and state live in data/.\n', encoding='utf8')
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
@@ -50,7 +51,7 @@ def main():
             raise ValueError(f'发行包包含应排除的资源：{file.relative_to(folder)}')
         if file.is_file() and file.relative_to(folder).parts[0] == 'data':
             raise ValueError('发行目录不应包含用户data目录')
-    for motion in ('side_lying.fbx', 'first.json', 'second.json'):
+    for motion in ('side_lying.fbx', 'first.json', 'second.json', 'running-first.json', 'running-second.json', 'running-aemeath.json'):
         if not (folder / '_internal/src/assets/motions' / motion).is_file():
             raise ValueError(f'发行包缺少默认动作：{motion}')
     releases = ROOT / 'release'

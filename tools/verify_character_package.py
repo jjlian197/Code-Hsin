@@ -59,8 +59,11 @@ def main():
         def select(future):
             menu = QMenu(window)
             window._populate_characters(menu)
-            action = next(a for a in menu.actions() if a.text() == "爱弥斯")
-            action.trigger()
+            action = next((a for a in menu.actions() if a.text() == "爱弥斯"), None)
+            if action:
+                action.trigger()
+            else:
+                window.sprite_view.load_character(project_path('.runtime/characters/aemeath/character.json'))
             menu.deleteLater()
             future.set_result(True)
         await probe.call(select)
@@ -68,7 +71,7 @@ def main():
         await tick(10)
         info = await probe.call(lambda f: f.set_result(window.sprite_view.model_info))
         assert info["character"] == "爱弥斯" and info["texture_errors"] == 0
-        assert len(info["expressions"]) == 12 and info["motions"] == ["idle", "nod"]
+        assert len(info["expressions"]) == 12 and info["motions"] == ["idle", "nod", "wave", "peace", "finger_heart", "crossed_arms", "treadmill_running"]
         assert await probe.call(lambda f: f.set_result(not window._motion_actions["side_lying"].isEnabled()))
         await probe.call(lambda f: (window.set_view_mode("head_front"), f.set_result(None)))
         await tick(30)

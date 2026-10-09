@@ -8,6 +8,7 @@ import {blendFromCurrent} from './pose_transitions.js';
 import {setGroundSupport} from './ground_support.js';
 import {PoseCloth} from './pose_cloth.js';
 import {adaptChestPhysics} from './physics_compat.js';
+import {adaptAemeathChestPhysics} from './aemeath_physics.js';
 
 // 每个模型使用独立的 Ammo arena。切换时释放整个 arena 的引用，避免
 // 官方 MMDPhysics 缺少销毁接口导致刚体在同一 WASM heap 中累积。
@@ -38,6 +39,7 @@ export class AnimationRuntime {
       }
     };
     adaptChestPhysics(mesh);
+    this.chestCompensatedBodies=adaptAemeathChestPhysics(mesh,options.model_hash);
     this.helper.add(mesh, { animation: this.clips.idle, physics: true,
       unitStep: 1 / 65, maxStepNum: 3, warmup: 30 });
     const objects = this.helper.objects.get(mesh);
@@ -398,6 +400,7 @@ export class AnimationRuntime {
       motionAngle = Math.max(motionAngle, b.bone.quaternion.angleTo(this.restRotations[i]));
     });
     return { motion: this.motion, physics_enabled: this.physicsEnabled,
+      chest_compensated_bodies:this.chestCompensatedBodies,
       posture_state:this.motion==='lie_down'||this.motion==='get_up'||this.motion==='side_lying'?this.motion:'standing',
       transition_available:!!this.transitions,transition_error:this.transitionError,
       transition_duration:this.poseProfile?this.activeAction?.getClip().duration:null,

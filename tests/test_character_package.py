@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src.core.character_package import load_character_package
 
@@ -40,6 +41,20 @@ class CharacterPackageTests(unittest.TestCase):
     def test_uncalibrated_motion_rejected(self):
         self.manifest["capabilities"]["motions"] = ["idle", "side_lying"]
         with self.assertRaisesRegex(ValueError, "能力"):
+            self.load()
+    def test_legacy_calibrated_package_upgrades_without_lying(self):
+        digest = self.manifest['model']['sha256']
+        with patch('src.core.character_package.AEMEATH_HASHES', {digest}):
+            motions = self.load()['capabilities']['motions']
+            self.assertIn('finger_heart', motions)
+            self.assertIn('treadmill_running', motions)
+            self.assertNotIn('side_lying', motions)
+            self.manifest['capabilities']['motions'] = ['idle', 'side_lying']
+            with self.assertRaisesRegex(ValueError, '能力'):
+                self.load()
+    def test_uncalibrated_complex_motion_rejected(self):
+        self.manifest['capabilities']['motions'] = ['idle', 'finger_heart']
+        with self.assertRaisesRegex(ValueError, '能力'):
             self.load()
     def test_invalid_weights_rejected(self):
         self.write("morphs.json", {"version": 1, "aliases": {}, "expressions": {"normal": {}, "happy": {"smile": 2}}})

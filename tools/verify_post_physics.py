@@ -26,7 +26,7 @@ def main():
     viewer=target/'viewer.js'
     # 对照窗口保留原版；日常播放器的默认改骨不能污染实验分组。
     viewer.write_text(viewer.read_text(encoding='utf8').replace(
-        'const chestRigBones=applyHsinChestRig(data,options.model_hash);', 'const chestRigBones=0;'),encoding='utf8')
+        'const chestRigBones=applyHsinChestRig(data,options.model_hash)||applyAemeathChestRig(data,options.model_hash);', 'const chestRigBones=0;'),encoding='utf8')
     shutil.copytree(ROOT/'src/assets/motions',target.parent/'motions',dirs_exist_ok=True)
     viewer.write_text(viewer.read_text(encoding='utf8')+"\nwindow.HsinPmxDebug.trialChest=()=>{if(!mesh)return null;mesh.updateMatrixWorld(true);return mesh.skeleton.bones.map((b,i)=>({index:i,name:b.name,parent:b.parent?.name,position:b.getWorldPosition(new THREE.Vector3()).toArray(),rotation:b.quaternion.toArray()})).filter(b=>/^(左右胸|左胸|右胸|ZSpring_Spine_)/.test(b.name));};\n",encoding='utf8')
     if args.running:viewer.write_text(viewer.read_text(encoding='utf8')+'\n'+(ROOT/'tools/rig/post_physics_preview.js').read_text(encoding='utf8'),encoding='utf8')

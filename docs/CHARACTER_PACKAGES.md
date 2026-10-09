@@ -35,13 +35,13 @@ node --loader ./tools/node_three_loader.mjs tools/build_character_package.mjs $s
 | morph_map.json | version=1、aliases（行为通道别名，可用 null 禁用）、expressions（原生顶点 Morph 到 0–1 权重） |
 | report.json / preview.html | 骨架报告与可校正预览 |
 
-manifest 的模型包含 path、sha256、textures；贴图逐项记录 source 与 path。所有路径支持绝对路径或相对 character.json 所在目录的路径。capabilities 当前接受 motions=[idle] 或 [idle,nod]，physics 为布尔值；表情菜单从已验证的 Morph 映射生成。角色包不能开放未校准的复杂手势、侧躺或默认配置中的 VMD。
+manifest 的模型包含 path、sha256、textures；贴图逐项记录 source 与 path。所有路径支持绝对路径或相对 character.json 所在目录的路径。capabilities 的 physics 为布尔值，motions 以待机开始。v1.4.0已验证的爱弥斯原版/改骨副本支持idle、nod、wave、peace、finger_heart、crossed_arms、treadmill_running；旧版[idle,nod]清单自动升级，无需重新导入。其他模型仍仅支持基础动作。角色包不开放侧躺或默认配置中的VMD。
 
 加载前检查版本、模型哈希、资源文件与数据结构，渲染端再核对实际骨骼/Morph。异步加载失败会重载切换前的角色并显示原因；连续选择沿用请求代次，最后一次选择生效。切回心会还原默认映射、手势和过渡配置，物理偏好沿用用户选择。
 
 ## 爱弥斯与验证
 
-爱弥斯包提供 12 项表情映射，修正左右嘴角、垂眼、眼球方向的名称差异；保留 27 个需要的顶点 Morph。眨眼、微笑/笑眯眯、星星眼、爱心眼和五元音已查看真实网格；各元音能切换并释放，未进行真实音频时序或听感验收。基础动作仍为待机/点头与视线跟随，复杂手势继续待校准。
+爱弥斯包提供 12 项表情映射，修正左右嘴角、垂眼、眼球方向的名称差异；保留 27 个需要的顶点 Morph。眨眼、微笑/笑眯眯、星星眼、爱心眼和五元音已查看真实网格；各元音能切换并释放，未进行真实音频时序或听感验收。v1.4.0已接入点头、挥手、V手势、比心、X手势与半速跑步，并应用胸部改骨/补偿；躺下保持禁用。比心适配实际上胸位置、指长和末端骨，正面及斜侧面检查通过。
 
 ```powershell
 python -m unittest discover -s tests -p test_character_package.py
@@ -55,4 +55,4 @@ python -m tools.verify_character_settings
 
 角色管理通过7项针对性检查及原有27项设置、聊天和TTS回归。原生窗口验证设置页保存/启用爱弥斯、菜单完整配置切回心、从磁盘恢复爱弥斯配置；验证无效Morph包失败时不提交其人设、音色或启动选择。截图和报告在 `.runtime/character-settings-validation/`。测试关闭语音、不开麦、不连接服务，未做真实新音色合成或Agent人设验收。
 
-本轮 v1.3.0 已重新构建 EXE，冻结版验证心双形态、爱弥斯完整配置切换与返回，模型和贴图仍由用户合法导入。后续完善音色资源导入和试听，再校准爱弥斯挥手/比心/X、扩展 VPD/VMD 与角色包能力。
+本轮 v1.3.0 已重新构建 EXE，冻结版验证心双形态、爱弥斯完整配置切换与返回，模型和贴图仍由用户合法导入。v1.4.0进一步接入爱弥斯站立动作与胸部适配；后续完善音色资源导入/试听、衣物精修及更多角色的VPD/VMD能力。

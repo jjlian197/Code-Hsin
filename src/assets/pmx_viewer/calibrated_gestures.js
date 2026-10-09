@@ -1,13 +1,15 @@
 import * as THREE from './lib/three/three.module.js';
 import { HEART_POSE } from './heart_pose.js';
+import {gestureBones} from './gesture_bones.js';
+import {isAemeathChestModel} from './aemeath_physics.js';
 
 const vector = () => new THREE.Vector3();
 const quaternion = () => new THREE.Quaternion();
 const ease = t => { const x = THREE.MathUtils.clamp(t, 0, 1); return x*x*x*(x*(x*6-15)+10); };
 
 export function gestureGeometry(mesh) {
-  const points = Object.fromEntries(mesh.skeleton.bones.filter(b => /^(頭|首|上半身2|センター|[右左](腕|ひじ|手首|(親|人|中|薬|小)指[１２３先]))$/.test(b.name))
-    .map(b => [b.name, b.getWorldPosition(vector()).toArray()]));
+  const points = Object.fromEntries([...gestureBones(mesh)].filter(([name]) => /^(頭|首|上半身2|センター|[右左](腕|ひじ|手首|(親|人|中|薬|小)指[１２３先]))$/.test(name))
+    .map(([name,b]) => [name, b.getWorldPosition(vector()).toArray()]));
   const p = n => new THREE.Vector3(...points[n]);
   const lower = ['中', '薬', '小'].map(finger => {
     const directions = ['左', '右'].map(side => p(side+finger+'指先').sub(p(side+finger+'指１')));
@@ -24,8 +26,8 @@ export function gestureGeometry(mesh) {
 }
 
 // 沿用参考项目的轮廓求解，直接使用心的 PMX 骨长，不套用 GLB 的绑定坐标或缩放。
-export function createCalibratedGestures(mesh) {
-  const bones = new Map(mesh.skeleton.bones.map(b => [b.name, b]));
+export function createCalibratedGestures(mesh, rig = null) {
+  const bones = gestureBones(mesh);
   const names = HEART_POSE.map(p => p.name);
   const sides = ['左', '右'];
   for (const name of [...names, '上半身2', 'センター', ...sides.flatMap(side =>
@@ -99,7 +101,8 @@ export function createCalibratedGestures(mesh) {
       setWorld(side+'手首', quaternion().setFromUnitVectors(b.sub(a).normalize(), axis)
         .multiply(bones.get(side+'手首').getWorldQuaternion(quaternion())));
     }
-    const chest = pos('上半身2');
+    // 爱弥斯的上半身1在上半身2之上；比心以实际上胸为基准。
+    const chest = pos(isAemeathChestModel(rig?.report.model.sha256)?rig.upperTorso().name:'上半身2');
     const center = chest.clone().add(new THREE.Vector3(0, 0.65*bodyScale, 2.8*bodyScale));
     for (const side of sides) arm(side, pos(side+'手首').add(center.clone().sub(midpoint(side))));
 

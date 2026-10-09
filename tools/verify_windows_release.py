@@ -115,6 +115,15 @@ def main():
             current = wait(lambda item: item['character']['active'] == 'aemeath' and not item['character']['switching'])
             assert current['renderer']['info']['character'] == '爱弥斯'
             assert current['renderer']['info']['texture_errors'] == 0
+            assert current['renderer']['info']['chest_rig_bones'] == 10
+            assert current['renderer']['info']['runtime']['chest_compensated_bodies'] == 6
+            assert set(current['available_motions']) == {'idle', 'nod', 'wave', 'peace', 'finger_heart', 'crossed_arms', 'treadmill_running'}
+            command('physics', {'action': 'on'})
+            for group in ('nod', 'wave', 'peace', 'finger_heart', 'crossed_arms', 'treadmill_running'):
+                command('motion', {'group': group})
+                wait(lambda item: item['renderer']['info']['runtime'].get('motion') == group)
+                wait(lambda item: item['renderer']['info']['runtime'].get('motion') == 'idle', timeout=25)
+            checks.append('冻结EXE爱弥斯六项动作、默认胸部适配、结束复位与禁用侧躺')
             command('character', {'action': 'switch', 'id': 'hsin'})
             current = wait(lambda item: item['character']['active'] == 'hsin' and not item['character']['switching'])
             assert current['renderer']['info']['character'] is None

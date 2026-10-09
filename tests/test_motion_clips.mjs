@@ -11,6 +11,7 @@ const source = fs.readFileSync(new URL('../src/assets/pmx_viewer/motions.js', im
   .replace("from 'three'", `from ${JSON.stringify(threeUrl.href)}`)
   .replace("from './rig/schema.js'", `from ${JSON.stringify(new URL('../src/assets/pmx_viewer/rig/schema.js', import.meta.url).href)}`)
   .replace("from './heart_pose.js'", `from ${JSON.stringify(new URL('../src/assets/pmx_viewer/heart_pose.js', import.meta.url).href)}`)
+  .replace("from './gesture_bones.js'", `from ${JSON.stringify(new URL('../src/assets/pmx_viewer/gesture_bones.js', import.meta.url).href)}`)
   .replace("from './calibrated_gestures.js'", `from ${JSON.stringify(new URL('../src/assets/pmx_viewer/calibrated_gestures.js', import.meta.url).href)}`);
 const { createBuiltinClips, palmNormal } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const paths = JSON.parse(execFileSync('python', ['-c', 'import json; from src.core.app_config import load_config,project_path; print(json.dumps([str(project_path(p)) for p in load_config()["sprite"]["model"]["forms"].values()]))'], {encoding:'utf8'}));

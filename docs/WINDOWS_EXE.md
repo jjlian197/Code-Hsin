@@ -1,9 +1,9 @@
 # Windows EXE 使用与构建
 
-v1.3.0 提供 Windows x64 安装包与便携 ZIP，无需安装 Python来运行桌面端。
+v1.4.0 提供 Windows x64 安装包与便携 ZIP，无需安装 Python来运行桌面端。
 
-- 安装版：运行 `Code-Hsin-v1.3.0-windows-x64-setup.exe`，按当前用户安装，无需管理员权限。程序默认在 `%LOCALAPPDATA%\Programs\Hsin`，设置和状态在 `%LOCALAPPDATA%\Hsin`。升级替换程序资源，保留用户数据；卸载默认保留数据，交互卸载可选择清除。
-- 便携版：解压完整 `Code-Hsin-v1.3.0-windows-x64.zip`，运行 `Hsin.exe`。保留 `_internal` 和 `portable.txt`；首次启动创建 `data` 目录。复制整个文件夹可迁移数据，更新时保留旧 `data`，替换程序和资源。
+- 安装版：运行 `Code-Hsin-v1.4.0-windows-x64-setup.exe`，按当前用户安装，无需管理员权限。程序默认在 `%LOCALAPPDATA%\Programs\Hsin`，设置和状态在 `%LOCALAPPDATA%\Hsin`。升级替换程序资源，保留用户数据；卸载默认保留数据，交互卸载可选择清除。
+- 便携版：解压完整 `Code-Hsin-v1.4.0-windows-x64.zip`，运行 `Hsin.exe`。保留 `_internal` 和 `portable.txt`；首次启动创建 `data` 目录。复制整个文件夹可迁移数据，更新时保留旧 `data`，替换程序和资源。
 - `config.yaml` 是内置的心默认配置；自己的覆盖设置写入用户数据目录的 `config.local.yaml`，状态在其中的 `.runtime`，模型默认绑定到 `models/hsin/first/model.pmx`、`models/hsin/second/model.pmx`。`voice/profiles.json`和`inference`资源也在用户数据目录查找。
 - 旧版 EXE 旁的 `config.local.yaml`、六种持久状态、角色包目录和音色配置仅在新数据目录缺失时迁移；原文件保留，不迁移聊天音频缓存或运行日志。来自另一安装目录的数据需自行复制到新用户数据目录。
 - `--data-dir 路径`可指定独立数据目录，适合隔离验证。安装包和 ZIP 来自同一个构建目录。
@@ -33,7 +33,7 @@ v1.3.0 提供 Windows x64 安装包与便携 ZIP，无需安装 Python来运行�
 
 ```powershell
 python -m tools.prepare_release_voice
-python -m tools.build_windows_release --version 1.3.0 --installer "C:\path\to\ISCC.exe"
+python -m tools.build_windows_release --version 1.4.0 --installer "C:\path\to\ISCC.exe"
 ```
 
 前一步仅导出固定台词和筛选原声，不复制私人对话缓存。后一步使用 `packaging/Hsin.spec` 的显式清单，生成 `dist/Hsin/Hsin.exe` 与发布 ZIP、SHA256；资源目录、包结构和配置从当前项目加载，解压位置不依赖开发机路径。默认配置来自 `packaging/config.yaml`，从不复制 `config.local.yaml`。

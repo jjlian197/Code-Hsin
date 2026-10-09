@@ -4,6 +4,12 @@ import json
 import math
 from pathlib import Path
 
+AEMEATH_HASHES = {
+    "79b622d0a87ab61516d2c3008d241d9145daa905acbcbd29d070c68cc55fa437",
+    "8b7294f38ace5dfae8ba65b400d4feb13897a1d15f828e285189fc56ef6f7854",
+}
+STANDING_MOTIONS = ["idle", "nod", "wave", "peace", "finger_heart", "crossed_arms", "treadmill_running"]
+
 
 def load_character_package(file):
     file = Path(file).resolve()
@@ -48,8 +54,15 @@ def load_character_package(file):
         if not isinstance(weights, dict) or any(type(v) not in (float, int) or not math.isfinite(v) or not 0 <= v <= 1 for v in weights.values()):
             raise ValueError("角色包表情权重无效")
     caps = package.get("capabilities", {})
-    if not isinstance(caps, dict) or caps.get("motions") not in (["idle"], ["idle", "nod"]) or type(caps.get("physics")) is not bool:
-        raise ValueError("角色包能力清单无效；本版仅支持基础动作")
+    motions = caps.get("motions") if isinstance(caps, dict) else None
+    allowed = STANDING_MOTIONS if digest in AEMEATH_HASHES else ["idle", "nod"]
+    if (not isinstance(motions, list) or not motions or motions[0] != "idle"
+            or any(not isinstance(name, str) or name not in allowed for name in motions)
+            or len(set(motions)) != len(motions) or type(caps.get("physics")) is not bool):
+        raise ValueError("角色包能力清单无效；复杂动作需要已校准的模型")
+    # 兼容旧版爱弥斯角色包，无需用户重新导入；仍不开放侧躺。
+    if digest in AEMEATH_HASHES and motions == ["idle", "nod"]:
+        caps = {**caps, "motions": STANDING_MOTIONS.copy()}
     textures = model.get("textures", [])
     if not isinstance(textures, list):
         raise ValueError("角色包贴图列表无效")

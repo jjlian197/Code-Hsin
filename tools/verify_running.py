@@ -1,5 +1,6 @@
 """隔离原生窗口，检查半速跑步菜单、复位和侧躺后的动作排队。"""
 import asyncio
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import tempfile
@@ -13,6 +14,9 @@ from tools.verify_behavior import GuiProbe
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--character')
+    args = parser.parse_args()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(["verify_running"])
     app.setQuitOnLastWindowClosed(False)
@@ -41,8 +45,8 @@ def main():
         return json.loads(await probe.evaluate("JSON.stringify(window.HsinPmxDebug.rigGeometry());"))
 
     async def verify():
-        for form in ("first", "second"):
-            await gui(lambda: window.set_model_form(form))
+        for form in (("aemeath",) if args.character else ("first", "second")):
+            await gui(lambda: window.sprite_view.load_character(project_path(args.character)) if args.character else window.set_model_form(form))
             for _ in range(500):
                 if await gui(lambda: window.sprite_view.model_loaded):
                     break
@@ -52,7 +56,7 @@ def main():
                 raise AssertionError("模型加载超时")
             info = await gui(lambda: window.sprite_view.model_info)
             assert info["chest_rig_bones"] == 10
-            assert info["runtime"]["transition_available"]
+            assert info["runtime"]["transition_available"] == (not bool(args.character))
             assert await gui(lambda: window._motion_actions["treadmill_running"].isEnabled())
             await gui(lambda: window.sprite_view.frame_timer.stop())
             await probe.evaluate("window.__runningClock=performance.now();window.HsinPmx.tick(window.__runningClock);")
@@ -79,11 +83,14 @@ def main():
             await probe.evaluate("window.HsinPmx.playMotion('finger_heart');")
             assert (await advance(2))["motion"] == "finger_heart"
             await advance(4)
-            await gui(lambda: window._motion_actions["side_lying"].trigger())
-            assert (await advance(15))["motion"] == "side_lying"
-            await gui(lambda: window._motion_actions["treadmill_running"].trigger())
-            assert (await probe.state())["queued_motion"] == "treadmill_running"
-            assert (await advance(12))["motion"] == "treadmill_running"
+            if args.character:
+                assert not await gui(lambda: window._motion_actions['side_lying'].isEnabled())
+            else:
+                await gui(lambda: window._motion_actions["side_lying"].trigger())
+                assert (await advance(15))["motion"] == "side_lying"
+                await gui(lambda: window._motion_actions["treadmill_running"].trigger())
+                assert (await probe.state())["queued_motion"] == "treadmill_running"
+                assert (await advance(12))["motion"] == "treadmill_running"
             await probe.evaluate("window.HsinPmx.playMotion('idle');")
             assert (await advance(1))["motion"] == "idle"
             assert (await positions())["finite"]
@@ -112,7 +119,7 @@ def main():
         window.hide()
         pool.shutdown(wait=True)
         temp.cleanup()
-    project_path(".runtime/running-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")
+    project_path(".runtime/aemeath-running-validation.json" if args.character else ".runtime/running-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf8")
     print(json.dumps(report, ensure_ascii=False), flush=True)
     return 0 if report["success"] else 1
 

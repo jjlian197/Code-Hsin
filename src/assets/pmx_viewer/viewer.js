@@ -11,6 +11,7 @@ import {matchRig} from './rig/matcher.js';
 import {createRigAccess} from './rig/access.js';
 import {validateMorphMap,mappedMorphNames} from './rig/morphs.js';
 import {applyHsinChestRig,hsinForm,runningClip} from './hsin_motion.js';
+import {applyAemeathChestRig,isAemeathChestModel} from './aemeath_physics.js';
 
 let bridge, mesh, frameBounds, standingBounds, runtime, generation=0, stopped=false;
 let viewMode='full', headTarget=null, headScale=1;
@@ -180,7 +181,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
     const loader=new MMDLoader();
     const data=await new Promise((resolve,reject)=>loader.loadPMX(url,resolve,undefined,reject));
     if(current!==generation)return;
-    const chestRigBones=applyHsinChestRig(data,options.model_hash);
+    const chestRigBones=applyHsinChestRig(data,options.model_hash)||applyAemeathChestRig(data,options.model_hash);
     const originalMorphCount=data.morphs.length;
     // 只保留已实现的顶点表情，避免为百余个表情分配数百 MB 的显存。
     if(options.morph_map)validateMorphMap(options.morph_map,data.morphs.filter(m=>m.type===1).map(m=>m.name));
@@ -214,7 +215,7 @@ async function loadModel(url,requestId,textureOverrides={},options={}){
       }catch(error){options.transition_error=String(error.message||error);console.warn(options.transition_error);}
       if(current!==generation){dispose(candidate);return;}
     }
-    const form=hsinForm(options.model_hash);
+    const form=hsinForm(options.model_hash)||(isAemeathChestModel(options.model_hash)?'aemeath':null);
     if(form&&(!options.allowed_motions||options.allowed_motions.includes('treadmill_running'))){
       const response=await fetch(new URL(`../motions/running-${form}.json`,import.meta.url));
       if(!response.ok)throw new Error('跑步动作文件无法读取');
