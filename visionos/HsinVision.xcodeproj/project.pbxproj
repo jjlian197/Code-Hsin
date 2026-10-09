@@ -24,6 +24,7 @@
 		A16 = {isa = PBXBuildFile; fileRef = B17; };
 		A17 = {isa = PBXBuildFile; fileRef = B18; };
 		A18 = {isa = PBXBuildFile; fileRef = B19; };
+		A19 = {isa = PBXBuildFile; fileRef = B20; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		B17 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCareView.swift; sourceTree = "<group>"; };
 		B18 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoneCloth.swift; sourceTree = "<group>"; };
 		B19 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealityCloth.swift; sourceTree = "<group>"; };
+		B20 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchSpeech.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -80,7 +82,7 @@
 				B1 /* HsinVisionApp.swift */,
 				B2 /* CompanionStore.swift */,
 				B3 /* CompanionView.swift */,
-				B10, B11, B12, B13, B14, B15, B16, B17, B18, B19,
+				B10, B11, B12, B13, B14, B15, B16, B17, B18, B19, B20,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -169,7 +171,7 @@
 				A1 /* HsinVisionApp.swift in Sources */,
 				A2 /* CompanionStore.swift in Sources */,
 				A3 /* CompanionView.swift in Sources */,
-				A9, A10, A11, A12, A13, A14, A15, A16, A17, A18,
+				A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -198,13 +200,13 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HsinVision/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Hsin Spatial";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "与爱弥斯语音交谈时需要使用麦克风。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hsin.spatial;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = xros;
@@ -220,13 +222,13 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = HsinVision/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Hsin Spatial";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "与爱弥斯语音交谈时需要使用麦克风。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.hsin.spatial;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = xros;

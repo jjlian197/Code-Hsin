@@ -185,6 +185,9 @@ struct CompanionView: View {
                 Toggle("实时衣发／胸部物理", isOn: $companion.clothPhysics)
                 Text(companion.physicsStatus).font(.caption2).foregroundStyle(.secondary)
                 Toggle("触摸反馈", isOn: $companion.touchEnabled)
+                Toggle("触摸语音", isOn: $companion.touchSpeechEnabled)
+                Text("对话与收音期间暂停触摸播报；侧躺时也可回应。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("闲置十分钟后休息", isOn: $companion.automaticRest).disabled(!companion.canChangePosture)
             }
             DisclosureGroup("连接详情") {

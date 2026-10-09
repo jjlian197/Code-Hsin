@@ -10,7 +10,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var bridgeURL = UserDefaults.standard.string(forKey: "bridgeURL") ?? "https://bridge.oieasklja.icu" {
         didSet { if bridgeURL != oldValue { stopSpeech(disconnect: true); bridgeToken = credential(for: bridgeURL) ?? "" } }
     }
-    @Published var bridgeToken = ""
+    @Published var bridgeToken = "" { didSet { if bridgeToken != oldValue { stopSpeech() } } }
     @Published var gatewayURL = UserDefaults.standard.string(forKey: "gatewayURL") ?? "" {
         didSet { if gatewayURL != oldValue { stopSpeech(disconnect: true); gatewayToken = credential(for: gatewayURL) ?? "" } }
     }
@@ -123,8 +123,16 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         didSet { UserDefaults.standard.set(randomLook, forKey: "randomLook"); if !randomLook { behavior.look("center", at: uptime) } }
     }
     @Published var touchEnabled = UserDefaults.standard.object(forKey: "touchEnabled") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(touchEnabled, forKey: "touchEnabled"); touchTargets.forEach { $0.isEnabled = touchEnabled } }
+        didSet { UserDefaults.standard.set(touchEnabled, forKey: "touchEnabled"); touchTargets.forEach { $0.isEnabled = touchEnabled }; if !touchEnabled && touchSpeechActive { stopSpeech() } }
     }
+    @Published var touchSpeechEnabled = UserDefaults.standard.object(forKey: "touchSpeechEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(touchSpeechEnabled, forKey: "touchSpeechEnabled")
+            if !touchSpeechEnabled && touchSpeechActive { stopSpeech() }
+        }
+    }
+    private var touchSpeechActive = false
+    private var lastTouchSpeech = -Double.infinity
     @Published var automaticRest = UserDefaults.standard.object(forKey: "automaticRest") as? Bool ?? true {
         didSet { UserDefaults.standard.set(automaticRest, forKey: "automaticRest"); noteInteraction() }
     }
@@ -394,6 +402,36 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             updateTouchTargets()
             status = characterName + "已就位；麦克风关闭"
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--touch-voice-check") {
+                Task { [weak self] in
+                    guard let self else { return }
+                    let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    bridgeToken = (try? String(contentsOf: documents.appendingPathComponent("TouchVoiceToken.txt"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+                    touchSpeechEnabled = true
+                    language = ProcessInfo.processInfo.arguments.contains("--touch-ja") ? "ja" : "zh"
+                    requestPosture(lying: true, preserveGesture: true)
+                    for _ in 0..<200 {
+                        if posture.phase == .sideLying { break }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    for attempt in 0..<2 {
+                        guard let target = touchTargets.first(where: { $0.name == "HsinTouch_body" }) else { return }
+                        touch(target)
+                        var playing = false
+                        for _ in 0..<1800 {
+                            playing = playing || player?.isPlaying == true
+                            if !busy { break }
+                            try? await Task.sleep(for: .milliseconds(100))
+                        }
+                        let receipt: [String: Any] = ["role": selectedCharacter, "language": language, "attempt": attempt,
+                            "played": playing, "phase": posture.phase.rawValue, "listening": isListening, "status": status]
+                        if let encoded = try? JSONSerialization.data(withJSONObject: receipt) {
+                            try? encoded.write(to: documents.appendingPathComponent("TouchVoiceCheck" + String(attempt) + ".json"), options: .atomic)
+                        }
+                        try? await Task.sleep(for: .seconds(3.1))
+                    }
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("--speech-probe") {
                 let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("SpeechProbe.wav")
                 let selectedLanguage = language
@@ -846,9 +884,20 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         guard behavior.touch(part, at: uptime) else { return }
         care.interact("touch", part: part, uptime: uptime)
         // A touch never forces a manually selected full-body pose to exit.
-        guard posture.phase == .standing, !busy, activeMotion != "treadmill_running" else { return }
-        let motion = part == "head" ? "finger_heart" : part == "chest" ? "crossed_arms" : part.contains("hand") ? "peace" : "wave"
-        gesture(motion, label: "互动")
+        if posture.phase == .standing && !busy && activeMotion != "treadmill_running" {
+            let motion = part == "head" ? "finger_heart" : part == "chest" ? "crossed_arms" : part.contains("hand") ? "peace" : "wave"
+            gesture(motion, label: "互动")
+        }
+        #if DEBUG
+        // Motion probes must remain silent and independent of network availability.
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.hasSuffix("-probe") }) { return }
+        #endif
+        guard TouchSpeech.eligible(enabled: touchSpeechEnabled, visible: sceneVisible, busy: busy,
+                                  listening: isListening, voiceSession: voiceSessionActive, playing: player != nil,
+                                  queued: !pendingAudio.isEmpty, now: uptime, last: lastTouchSpeech),
+              !bridgeToken.isEmpty, let text = TouchSpeech.phrase(role: selectedCharacter, language: language, part: part) else { return }
+        lastTouchSpeech = uptime
+        speakPhrase(text, touch: true)
     }
 
     private func updateTouchTargets() {
@@ -981,14 +1030,20 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func speakTest() {
         noteInteraction()
         stopSpeech()
+        let text = selectedCharacter == "hsin"
+            ? (language == "zh" ? "御者，心正在空间里陪伴你。" : "御者、心はそばにいるよ。")
+            : (language == "zh" ? "父亲，爱弥斯正在空间里陪伴你。" : "父さん、エイメスはそばにいるよ。")
+        speakPhrase(text, touch: false)
+    }
+
+    private func speakPhrase(_ text: String, touch: Bool) {
         let turn = generation
         let selectedLanguage = language
         let role = selectedCharacter
-        let text = role == "hsin"
-            ? (selectedLanguage == "zh" ? "御者，心正在空间里陪伴你。" : "御者、心はそばにいるよ。")
-            : (selectedLanguage == "zh" ? "父亲，爱弥斯正在空间里陪伴你。" : "父さん、エイメスはそばにいるよ。")
         let token = bridgeToken
         guard !token.isEmpty else { status = "请填写桥接访问令牌"; return }
+        touchSpeechActive = touch
+        turnFinished = true
         busy = true
         status = "正在合成"
         speechTask = Task { [weak self] in
@@ -999,13 +1054,28 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 guard health.service == "hsin-pc-voice", health.protocol == 1,
                       let voice = health.voices[role] else { throw BridgeError.message("桥接音色或协议不匹配") }
                 try Task.checkCancellation()
-                let requestID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-                activeRequest = requestID
-                let audio = try await perform(request(base, path: "v1/tts", token: token, payload: [
-                    "request_id": requestID, "voice_id": role, "voice_fingerprint": voice.fingerprint,
-                    "text": text, "language": selectedLanguage, "speed": 1.0]))
-                try Task.checkCancellation()
                 guard turn == generation else { return }
+                let cacheURL = touch ? try TouchSpeech.cacheURL(key: TouchSpeech.cacheKey(endpoint: base.absoluteString,
+                    role: role, language: selectedLanguage, fingerprint: voice.fingerprint, text: text)) : nil
+                let cachedAudio = cacheURL.flatMap { try? Data(contentsOf: $0) }
+                let audio: Data
+                if let cachedAudio, (try? AVAudioPlayer(data: cachedAudio)) != nil {
+                    audio = cachedAudio
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("--touch-voice-check") { NSLog("[HsinVision] Touch voice cache hit %@ %@", role, selectedLanguage) }
+                    #endif
+                } else {
+                    let requestID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                    activeRequest = requestID
+                    audio = try await perform(request(base, path: "v1/tts", token: token, payload: [
+                        "request_id": requestID, "voice_id": role, "voice_fingerprint": voice.fingerprint,
+                        "text": text, "language": selectedLanguage, "speed": 1.0]))
+                    try Task.checkCancellation()
+                    guard turn == generation else { return }
+                    // Cache only decodable fixed responses, never private chat audio.
+                    _ = try AVAudioPlayer(data: audio)
+                    if let cacheURL { try? audio.write(to: cacheURL, options: .atomic) }
+                }
                 activeRequest = nil
                 let timeline = await Task.detached(priority: .userInitiated) {
                     SpeechMouthTimeline(audio: audio, text: text, language: selectedLanguage)
@@ -1013,6 +1083,9 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 try Task.checkCancellation()
                 guard turn == generation else { return }
                 let next = try AVAudioPlayer(data: audio)
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--touch-voice-check") { next.volume = 0 }
+                #endif
                 next.isMeteringEnabled = true
                 next.delegate = self
                 guard next.play() else { throw BridgeError.message("音频未能播放") }
@@ -1024,6 +1097,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             } catch {
                 guard turn == generation else { return }
                 busy = false
+                touchSpeechActive = false
                 activeRequest = nil
                 status = error.localizedDescription
             }
@@ -1345,6 +1419,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
         pendingAudio.removeAll()
         turnFinished = true
+        touchSpeechActive = false
         speechTask?.cancel()
         speechTask = nil
         player?.stop()
@@ -1375,6 +1450,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self.playNextSentence()
             if self.player == nil && self.pendingAudio.isEmpty && self.turnFinished {
                 self.busy = false
+                self.touchSpeechActive = false
                 self.status = flag ? "播放完成" : "播放失败"
                 self.resumeVoiceWhenReady()
             }

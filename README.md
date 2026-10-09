@@ -121,4 +121,4 @@ macOS 的 PC 语音推理与智谱 STT 选项见 [PC 语音桥接指南](docs/MA
 
 ## visionOS
 
-原生 SwiftUI／RealityKit 版本位于 `visionos/`。角色默认后端随切换改变：心使用 PC 已有 Hermes Agent，爱弥斯使用 Aemeath 配置的 OpenClaw；PC／智谱 STT 仍可选择。详见 [角色后端](docs/VISIONOS_CHARACTER_BACKENDS.md)、[Hsin 私有资源转换](docs/VISIONOS_HSIN_ASSETS.md) 和 [macOS 功能迁移计划](docs/VISIONOS_PARITY_PLAN.md)。
+原生 SwiftUI／RealityKit 版本位于 `visionos/`，正式版 [1.0.0 / Build 16](docs/VISIONOS_RELEASE_1.0.0.md) 支持两角色中日触摸语音及侧躺回应。角色默认后端随切换改变：心使用 PC 已有 Hermes Agent，爱弥斯使用 Aemeath 配置的 OpenClaw；PC／智谱 STT 仍可选择。详见 [角色后端](docs/VISIONOS_CHARACTER_BACKENDS.md)、[Hsin 私有资源转换](docs/VISIONOS_HSIN_ASSETS.md) 和 [macOS 功能迁移计划](docs/VISIONOS_PARITY_PLAN.md)。
