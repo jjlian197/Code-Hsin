@@ -61,6 +61,7 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var busy = false
     @Published private(set) var modelReady = false
     private var character: Entity?
+    private var characterLighting: Entity?
     private var faces: [Entity] = []
     private var motionRoot: Entity?
     private var motions: [String: AnimationResource] = [:]
@@ -305,6 +306,24 @@ final class CompanionStore: NSObject, ObservableObject, AVAudioPlayerDelegate {
             }
             #endif
             character?.removeFromParent()
+            characterLighting?.removeFromParent()
+            // Directional fill covers the complete standing/lying envelope without
+            // distance falloff. Keep lights outside the animated/scaled model.
+            let lighting = Entity()
+            lighting.name = "CharacterFullBodyLighting"
+            for (name, position, intensity) in [
+                ("Key", SIMD3<Float>(-1, 1.2, 2), Float(650)),
+                ("Fill", SIMD3<Float>(1.5, 0.3, 1.5), Float(400)),
+                ("BackFill", SIMD3<Float>(0, 0.5, -2), Float(250))
+            ] {
+                let light = Entity()
+                light.name = name
+                light.components.set(DirectionalLightComponent(color: .white, intensity: intensity))
+                light.look(at: .zero, from: position, relativeTo: nil)
+                lighting.addChild(light)
+            }
+            content.add(lighting)
+            characterLighting = lighting
             content.add(loaded)
             character = loaded
             faces = facialEntities(in: loaded)

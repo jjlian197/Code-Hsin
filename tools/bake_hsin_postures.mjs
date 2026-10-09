@@ -54,8 +54,27 @@ for (const motion of sample.motions) {
 const standing = sample.motions.find(motion => motion.name === 'idle').frames[0];
 const cloth = new PoseCloth(mesh, transitions.floor);
 const realtimeCloth = process.argv.includes('--realtime-cloth');
-const evaluate = (channels, seconds, strength = 1) => {
-  reset(); apply(idle, seconds); apply(channels, seconds); update();
+const feet = ['左', '右'].map(side => ({
+  ankle: bones.find(bone => bone.name === side + '足首'),
+  knee: bones.find(bone => bone.name === side + 'ひざ'),
+}));
+const alignFootDorsum = strength => {
+  mesh.updateMatrixWorld(true);
+  for (const {ankle, knee} of feet) {
+    // Derive a foot frame from the actual shin, keeping toes along the leg and
+    // the dorsum toward the window front (+Z), instead of imposing a world yaw.
+    const toe = ankle.getWorldPosition(new THREE.Vector3()).sub(knee.getWorldPosition(new THREE.Vector3())).normalize();
+    const dorsal = new THREE.Vector3(0, 0, 1).addScaledVector(toe, -toe.z).normalize();
+    const across = new THREE.Vector3().crossVectors(dorsal, toe).normalize();
+    const world = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(across, dorsal, toe));
+    const local = ankle.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(world);
+    ankle.quaternion.slerp(local, strength).normalize();
+  }
+};
+const evaluate = (channels, seconds, strength = 1, feetStrength = 1) => {
+  reset(); apply(idle, seconds); apply(channels, seconds);
+  if (feetStrength > 0) alignFootDorsum(feetStrength);
+  update();
   if (!realtimeCloth) cloth.update(1 / 30, strength); mesh.updateMatrixWorld(true); mesh.skeleton.update();
 };
 const side = tracks(transitions.clips.side_lying);
@@ -84,7 +103,10 @@ for (const [name, clip] of Object.entries(transitions.clips)) {
   const final = name === 'get_up' ? standing : lying;
   for (let index = 0; index <= Math.ceil(clip.duration * 30); index++) {
     const seconds = Math.min(index / 30, clip.duration);
-    evaluate(channels, seconds, name === 'get_up' ? THREE.MathUtils.smoothstep(clip.duration - seconds, 0, 0.6) : 1);
+    const feetStrength = name === 'side_lying' ? 1 : name === 'lie_down'
+      ? THREE.MathUtils.smoothstep(seconds, 2.5, 6)
+      : 1 - THREE.MathUtils.smoothstep(seconds, 1, 4);
+    evaluate(channels, seconds, name === 'get_up' ? THREE.MathUtils.smoothstep(clip.duration - seconds, 0, 0.6) : 1, feetStrength);
     let frame = name === 'side_lying' ? structuredClone(lying) : boneChannels(mesh, sample.scale);
     // Preserve a whole-rig handoff, including offline garment motion; no frozen-pose snap.
     if (name !== 'side_lying') {
@@ -102,6 +124,7 @@ for (const [name, clip] of Object.entries(transitions.clips)) {
 sample.realtime_cloth = realtimeCloth;
 sample.posture = {source_sha256: crypto.createHash('sha256').update(fs.readFileSync(transitionPath)).digest('hex'),
   model_sha256: digest, floor: transitions.floor * sample.scale,
+  feet: 'Shin-aligned toes; dorsum toward window front (+Z), blended through transitions',
   bounds: {min: envelope.min.toArray(), max: envelope.max.toArray()},
   cloth: 'Desktop PoseCloth sampled offline; settled side hold',
   limitations: ['No real-time cloth or per-vertex desktop ground projection; frozen settled hold']};

@@ -15,6 +15,28 @@ for (const file of process.argv.slice(2)) {
   equal(last('lie_down'), first('side_lying'));
   equal(last('side_lying'), first('get_up'));
   equal(last('get_up'), first('idle'));
+  if (sample.posture.feet) {
+    const frame = first('side_lying'), worlds = [];
+    const world = index => {
+      if (worlds[index]) return worlds[index];
+      const channel = frame[index];
+      const local = new THREE.Matrix4().compose(new THREE.Vector3().fromArray(channel, 1),
+        new THREE.Quaternion().fromArray(channel, 4), new THREE.Vector3(1, 1, 1));
+      const parent = sample.bones[index].parent;
+      return worlds[index] = parent < 0 ? local : world(parent).clone().multiply(local);
+    };
+    for (const side of ['左', '右']) {
+      const ankle = sample.bones.findIndex(bone => bone.name === side + '足首');
+      const knee = sample.bones.findIndex(bone => bone.name === side + 'ひざ');
+      const rotation = new THREE.Quaternion().setFromRotationMatrix(world(ankle));
+      const dorsal = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation);
+      const toe = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
+      const shin = new THREE.Vector3().setFromMatrixPosition(world(ankle))
+        .sub(new THREE.Vector3().setFromMatrixPosition(world(knee))).normalize();
+      assert(dorsal.z > .97, `${side} foot dorsum must face window front`);
+      assert(toe.dot(shin) > .99, `${side} toes must follow shin direction`);
+    }
+  }
   for (const name of ['lie_down', 'get_up', 'side_lying']) {
     const motion = motions[name];
     assert.equal(motion.frames.length, Math.ceil(motion.duration * 30) + 1);
