@@ -1,6 +1,6 @@
 # Hsin visionOS 开发准备
 
-2026-10-09 更新。当前 AVP 已安装 Build 14，加入两位角色全身补光、校准心双形态侧躺脚背朝前及躺下／起身过渡；Debug 与签名 Release 构建通过，安装状态见 [迁移进度](VISIONOS_PARITY_PLAN.md)。用户已确认 Build 13 衣料“效果很好”，Build 14 补光和脚姿外观待验收。空间化 M1–M5 见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)，尚未实施。STT 等待长与爱弥斯背部黑框未解决。下文保留历史开发记录。
+2026-10-09 更新。当前 AVP 已安装 Build 15：移除参考导出器额外生成的爱弥斯腰背深色矩形 TorsoLiner；原始网格、骨架、动作及物理不变，Debug 与签名 Release 构建通过，安装版本及设置保留已核对。Build 14 全身补光、心双形态侧躺脚姿继续保留验收。用户已确认 Build 13 衣料效果很好；Build 15 黑框修复外观待验收。功能见 [迁移进度](VISIONOS_PARITY_PLAN.md)，M1–M5 空间化见 [空间路线图](VISIONOS_SPATIAL_PLAN.md)，尚未实施。STT 等待长仍未解决。下文保留历史开发记录。
 
 ## 已确认基础
 

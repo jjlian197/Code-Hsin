@@ -103,3 +103,7 @@ node --loader ./tools/node_three_loader.mjs tools/bake_hsin_interactions.mjs .ru
 ## Build 14 脚部校准
 
 `bake_hsin_postures.mjs` 在 visionOS 私有姿态采样时，根据小腿方向和窗口前向 +Z 建立脚部坐标框，使脚背朝前、脚尖顺腿延伸；躺下／起身按支撑阶段平滑混入，与静止侧躺保持完整骨架端点一致。原 PMX 和 macOS `src/assets/motions/{first,second}.json` 只读；只重新部署三段姿态 USDZ 及对应姿态／互动元数据，角色几何、其他动作和物理配置保持原版本。定向姿态检查覆盖脚部前向及端点连续性，真实线性蒙皮核对足部未穿入原地面。
+
+## Build 15 爱弥斯附加腰背补片
+
+参考导出器生成的 `TorsoLiner` 是额外深色矩形，超出原服装轮廓。`repair_spatial_face.py` 的资源修复流程仅移除已识别的 `/Aemeath/Character/TorsoLiner` 网格，报告 `removed_reference_torso_liner`；校验对应网格与材质路径，缺少补片时安全跳过。原 GLB、原服装、参考项目导出器及动作／物理参数不变。当前角色 USDZ 同步修复，需在 AVP 验收腰背轮廓及填补网格移除后是否存在可见空隙。
